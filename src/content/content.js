@@ -13,9 +13,13 @@ let engineColor = 'w';
 let currentTurn = 'w'; // Track turn statefully
 let lastGrid = null; // Track previous board state
 
+// Delay Settings
+let minDelay = 800;
+let maxDelay = 2000;
+
 // --- Initialization ---
 
-chrome.storage.local.get(['solverEnabled', 'autoMoveEnabled', 'hideVisuals'], (result) => {
+chrome.storage.local.get(['solverEnabled', 'autoMoveEnabled', 'hideVisuals', 'minDelay', 'maxDelay'], (result) => {
     if (result.solverEnabled) {
         enableSolver();
     }
@@ -25,6 +29,9 @@ chrome.storage.local.get(['solverEnabled', 'autoMoveEnabled', 'hideVisuals'], (r
     if (result.hideVisuals) {
         isVisualsHidden = true;
     }
+    // Load delay settings
+    if (result.minDelay) minDelay = result.minDelay;
+    if (result.maxDelay) maxDelay = result.maxDelay;
 });
 
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
@@ -33,11 +40,11 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     }
     if (request.type === "TOGGLE_AUTO_MOVE") {
         isAutoMoveEnabled = request.enabled;
-        console.log("Solver: Auto Move is", isAutoMoveEnabled);
+
     }
     if (request.type === "TOGGLE_VISUALS") {
         isVisualsHidden = request.hidden;
-        console.log("Solver: Visuals hidden?", isVisualsHidden);
+
         if (isVisualsHidden) {
             removeHighlights();
         } else {
@@ -45,6 +52,11 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             lastFen = "";
             analyzeBoard();
         }
+    }
+    if (request.type === "UPDATE_DELAY_SETTINGS") {
+        minDelay = request.minDelay || 800;
+        maxDelay = request.maxDelay || 2000;
+
     }
 });
 
@@ -58,6 +70,7 @@ function enableSolver() {
     startBoardObserver();
     startMoveListObserver(); // Start watching moves specifically
     startPoller(); // Start failsafe
+    startNewGameDetector(); // NEW: Detect new games without refresh
 }
 
 function disableSolver() {
@@ -79,16 +92,28 @@ function disableSolver() {
 // --- Watchers ---
 
 function startBoardObserver() {
+    let retryCount = 0;
+    const maxRetries = 10;
+
     const findBoard = () => {
+        retryCount++;
+
+
         const possibleBoards = [
             document.querySelector('chess-board'),
             document.querySelector('#board-layout-chessboard'),
-            document.querySelector('.board')
+            document.querySelector('.board'),
+            document.querySelector('wc-chess-board'),
+            document.querySelector('[class*="board-layout"]')
         ];
         boardElement = possibleBoards.find(b => b !== null);
 
         if (boardElement) {
-            console.log("Solver: Board detected", boardElement);
+            console.log("Solver: ✅ Board detected!", boardElement.tagName, boardElement.className);
+
+            // Clear any old observer
+            if (observer) observer.disconnect();
+
             observer = new MutationObserver(handleBoardMutation);
             observer.observe(boardElement, {
                 childList: true,
@@ -96,9 +121,34 @@ function startBoardObserver() {
                 attributes: true,
                 attributeFilter: ['class']
             });
-            analyzeBoard();
+
+            // Reset extensionContextBroken flag on successful board detection
+            extensionContextBroken = false;
+
+            // Remove refresh warning if it exists
+            const warning = document.getElementById('solver-refresh-warning');
+            if (warning) warning.remove();
+
+            // Wait for game over modal to close with polling retry
+            let modalCheckAttempts = 0;
+            const waitForModalClose = () => {
+                modalCheckAttempts++;
+                if (!isGameOver()) {
+                    console.log("Solver: Modal closed, starting analysis");
+                    analyzeBoard();
+                } else if (modalCheckAttempts < 10) {
+                    // Keep trying every 500ms for up to 5 seconds
+                    setTimeout(waitForModalClose, 500);
+                } else {
+                    console.log("Solver: Modal still visible, analysis will start on first move");
+                }
+            };
+            setTimeout(waitForModalClose, 500);
+        } else if (retryCount < maxRetries) {
+            console.log(`Solver: ❌ Board not found, retrying in ${retryCount * 500}ms...`);
+            setTimeout(findBoard, retryCount * 500); // Exponential backoff
         } else {
-            setTimeout(findBoard, 2000);
+            console.error("Solver: ❌ Board not found after max retries! Try refreshing.");
         }
     };
     findBoard();
@@ -109,11 +159,11 @@ function startMoveListObserver() {
     const findMoveList = () => {
         const list = document.querySelector('vertical-move-list') || document.querySelector('.move-list') || document.querySelector('div[class*="move-list"]');
         if (list) {
-            console.log("Solver: Move list detected", list);
+
             moveListElement = list;
             moveListObserver = new MutationObserver((mutations) => {
                 // If move list changes, it's DEFINITELY a turn change or move update
-                console.log("Solver: Move list updated");
+
                 handleBoardMutation();
             });
             moveListObserver.observe(list, {
@@ -141,15 +191,120 @@ function startPoller() {
         const playerColor = getPlayerColor();
 
         if (domTurn && domTurn === playerColor && currentTurn !== playerColor) {
-            console.log("Solver: Poller detected turn change to US! Forcing analysis.");
+
             analyzeBoard();
         }
     }, 1000);
 }
 
+// Helper to check if Game Over modal is actually visible
+function isGameOver() {
+    // Only check very specific modals that are actual game-over indicators
+    // Avoid broad selectors like div[class*="game-over"] which cause false positives
+
+    // Method 1: Check for Chess.com specific game-over modal
+    const gameOverModal = document.querySelector('.game-over-modal, .modal-game-over');
+    if (gameOverModal) {
+        const style = window.getComputedStyle(gameOverModal);
+        if (style.display !== 'none' && style.visibility !== 'hidden' && style.opacity !== '0') {
+            return true;
+        }
+    }
+
+    // Method 2: Check for result text on board (e.g., "White wins", "Black wins", "Draw")
+    const resultElement = document.querySelector('.game-result, [class*="result-component"]');
+    if (resultElement && resultElement.offsetParent !== null) {
+        return true;
+    }
+
+    return false;
+}
+
 function stopPoller() {
     if (pollerInterval) clearInterval(pollerInterval);
     pollerInterval = null;
+}
+
+// NEW: Detect new game starts (URL change or game-over modal disappearing)
+let lastUrl = location.href;
+let newGameObserver = null;
+
+function forceRestart() {
+    console.log("Solver: 🔄 Force Restart Triggered!");
+
+    // Clear ALL state
+    boardElement = null;
+    moveListElement = null;
+    lastFen = "";
+    lastGrid = null;
+    currentTurn = 'w';
+    extensionContextBroken = false; // Reset this flag!
+
+    // Clear observers
+    if (observer) observer.disconnect();
+    if (moveListObserver) moveListObserver.disconnect();
+    stopPoller();
+    removeHighlights();
+
+    // Remove any refresh warning
+    const warning = document.getElementById('solver-refresh-warning');
+    if (warning) warning.remove();
+
+    // Restart after short delay (give page time to load new board)
+
+    setTimeout(() => {
+
+        startBoardObserver();
+        startMoveListObserver();
+        startPoller();
+        console.log("Solver: ✅ Restart Complete!");
+    }, 1000); // Increased to 1s for more reliable detection
+}
+
+function startNewGameDetector() {
+    // 1. URL Change Detection (setInterval fallback)
+    setInterval(() => {
+        if (location.href !== lastUrl) {
+            console.log("Solver: URL changed - New game detected!");
+            lastUrl = location.href;
+            forceRestart();
+        }
+    }, 1000);
+
+    // 2. History API Hooks (SPA navigation - more reliable)
+    const originalPushState = history.pushState;
+    const originalReplaceState = history.replaceState;
+
+    history.pushState = function (...args) {
+        originalPushState.apply(this, args);
+        console.log("Solver: pushState detected - New game!");
+        setTimeout(forceRestart, 500);
+    };
+
+    history.replaceState = function (...args) {
+        originalReplaceState.apply(this, args);
+        console.log("Solver: replaceState detected - New game!");
+        setTimeout(forceRestart, 500);
+    };
+
+    window.addEventListener('popstate', () => {
+        console.log("Solver: popstate detected - Navigation!");
+        setTimeout(forceRestart, 500);
+    });
+
+    // 3. Game-Over Modal Disappearing (new game button clicked)
+    newGameObserver = new MutationObserver(() => {
+        // Check if board element got disconnected (replaced with new one)
+        if (boardElement && !boardElement.isConnected) {
+            console.log("Solver: Board disconnected - Looking for new board...");
+            forceRestart();
+        }
+    });
+
+    newGameObserver.observe(document.body, {
+        childList: true,
+        subtree: true
+    });
 }
 
 let analysisDebounce = null;
@@ -161,8 +316,71 @@ function handleBoardMutation(mutations) {
     }, 100);
 }
 
+let extensionContextBroken = false;
+
+function showRefreshWarning() {
+    const existingWarning = document.getElementById('solver-refresh-warning');
+    if (existingWarning) return;
+
+    const warning = document.createElement('div');
+    warning.id = 'solver-refresh-warning';
+    warning.innerHTML = '⚠️ Chess Solver disconnected! <button onclick="location.reload()">Click to Refresh</button>';
+    warning.style.cssText = `
+        position: fixed;
+        top: 10px;
+        left: 50%;
+        transform: translateX(-50%);
+        background: #e74c3c;
+        color: white;
+        padding: 10px 20px;
+        border-radius: 8px;
+        z-index: 999999;
+        font-family: Arial, sans-serif;
+        font-size: 14px;
+        box-shadow: 0 4px 15px rgba(0,0,0,0.3);
+    `;
+    warning.querySelector('button').style.cssText = `
+        margin-left: 10px;
+        background: white;
+        color: #e74c3c;
+        border: none;
+        padding: 5px 10px;
+        border-radius: 4px;
+        cursor: pointer;
+        font-weight: bold;
+    `;
+    document.body.appendChild(warning);
+}
+
 function analyzeBoard() {
-    if (!boardElement) return;
+    // 0. Extension Context Check - if broken, nothing we can do
+    if (extensionContextBroken) {
+        return;
+    }
+
+    // Quick check if chrome.runtime is still valid
+    try {
+        if (!chrome.runtime || !chrome.runtime.id) {
+            extensionContextBroken = true;
+            console.error("Solver: Extension context invalidated! Please refresh the page.");
+            showRefreshWarning();
+            return;
+        }
+    } catch (e) {
+        extensionContextBroken = true;
+        console.error("Solver: Extension context invalidated! Please refresh the page.");
+        showRefreshWarning();
+        return;
+    }
+
+    // 0b. Validity Check (Zombie Board Fix)
+    if (!boardElement || !boardElement.isConnected) {
+        console.warn("Solver: Board disconnected/stale. Re-initializing...");
+        boardElement = null;
+        if (observer) observer.disconnect();
+        startBoardObserver(); // Force re-detection
+        return;
+    }
 
     // 1. FAST Turn Detection (DOM only)
     const domTurn = detectTurnFromDOM();
@@ -173,15 +391,32 @@ function analyzeBoard() {
     // 2. Determine Player Color
     const playerColor = getPlayerColor();
 
+    // DEBUG: Log turn detection status
+
+
     // 3. Early Exit
     if (currentTurn !== playerColor) {
+
         removeHighlights();
         return;
     }
 
+    // 4. Game Over Check
+    if (isGameOver()) return;
+
     try {
         // 4. Parse FEN (Only if it IS our turn)
         const { fen, grid } = parseBoardToFEN(boardElement);
+        if (!fen) return; // Exit if FEN invalid or Game Over
+
+        // CRITICAL: Validate piece count (prevent garbage FEN)
+        let pieceCount = 0;
+        grid.forEach(row => row.forEach(p => { if (p) pieceCount++; }));
+        if (pieceCount < 4) {
+            console.warn(`Solver: Invalid board state - only ${pieceCount} pieces detected. Skipping.`);
+            return;
+        }
+
         lastGrid = grid;
 
         if (fen === lastFen) return; // No change
@@ -192,23 +427,82 @@ function analyzeBoard() {
         fenParts[1] = currentTurn;
         const correctFen = fenParts.join(' ');
 
-        console.log(`Solver: My Turn (${currentTurn})! Analyzing...`);
+
 
         // Send to background
-        chrome.runtime.sendMessage({
-            type: "ANALYZE_BOARD",
-            fen: correctFen
-        }, (response) => {
-            if (response && response.bestMove) {
-                highlightMove(response.bestMove, response.topMoves);
+        try {
+            chrome.runtime.sendMessage({
+                type: "ANALYZE_BOARD",
+                fen: correctFen
+            }, (response) => {
+                if (chrome.runtime.lastError) {
+                    const errMsg = chrome.runtime.lastError.message || '';
+                    if (errMsg.includes('Extension context invalidated') || errMsg.includes('Extension runtime context')) {
+                        extensionContextBroken = true;
+                        showRefreshWarning();
+                    }
+                    return;
+                }
+                if (response && response.bestMove) {
+                    // VALIDATE MOVE: Check source square has a piece
+                    const from = response.bestMove.substring(0, 2);
+                    const fromFile = from.charCodeAt(0) - 97; // a=0, h=7
+                    const fromRank = parseInt(from[1]) - 1;   // 1=0, 8=7
+                    const gridPiece = grid[7 - fromRank]?.[fromFile];
+
+                    if (!gridPiece) {
+                        console.warn(`Solver: Engine suggested ${response.bestMove} but source square is EMPTY! Grid may be stale.`);
+                        // Force re-analyze instead of showing garbage
+                        lastFen = "";
+                        return;
+                    }
+
+                    highlightMove(response.bestMove, response.topMoves);
+                }
+            });
+        } catch (err) {
+            if (err.message && (err.message.includes("Extension context invalidated") || err.message.includes("Extension runtime context"))) {
+                extensionContextBroken = true;
+                console.error("Solver: Extension context invalidated! Please refresh.");
+                showRefreshWarning();
+            } else {
+                console.error("Solver: SendMessage failed", err);
             }
-        });
+        }
     } catch (e) {
         console.error("Solver: Analysis failed", e);
     }
 }
 
+
 function detectTurnFromDOM() {
+    // PRIORITY 1: Clock-based detection (Most Reliable on Chess.com)
+    // The player whose turn it is has an "active" or animated clock
+    const clocks = document.querySelectorAll('.clock-component, [class*="clock"]');
+    for (const clock of clocks) {
+        const isActive = clock.classList.contains('clock-player-turn') ||
+            clock.classList.contains('active') ||
+            clock.querySelector('.clock-running, .clock-active');
+        if (isActive) {
+            // Determine if this clock is bottom (our clock) or top (opponent)
+            const rect = clock.getBoundingClientRect();
+            const viewportHeight = window.innerHeight;
+            const isBottomClock = rect.top > viewportHeight / 2;
+
+            const playerColor = getPlayerColor();
+            // If bottom clock is active -> it's our turn
+            // If top clock is active -> opponent's turn
+            if (isBottomClock) {
+                // OUR TURN
+                return playerColor;
+            } else {
+                // OPPONENT TURN
+                return playerColor === 'w' ? 'b' : 'w';
+            }
+        }
+    }
+
+    // PRIORITY 2: Move list based detection (Fallback)
     const moveList = document.querySelector('vertical-move-list') || document.querySelector('.move-list') || document.querySelector('div[class*="move-list"]');
     if (!moveList) return null;
 
@@ -253,15 +547,22 @@ function getPlayerColor() {
 
         // If A1 is in the Top-Half of the board -> Black (Flipped)
         const relativeTop = a1Rect.top - boardRect.top;
+        const relativePercent = (relativeTop / boardRect.height) * 100;
+
+
 
         // A1 is Top-Right for Black, Bottom-Left for White
         // So if relativeTop is small (< 50% height), it's Black.
         if (relativeTop < boardRect.height / 2) {
+
             return 'b'; // Black
         } else {
+
             return 'w'; // White
         }
     }
+
+
 
     // Fallback: Attributes
     const orientation = boardElement.getAttribute('orientation');
@@ -277,7 +578,7 @@ function isBlackPiece(p) { return 'pnbrqk'.includes(p); }
 
 function parseBoardToFEN(board) {
     // 0. Game Over Check - Stop analyzing if game is done
-    if (document.querySelector('.game-over-modal') || document.querySelector('.modal-game-over') || document.querySelector('div[class*="game-over"]')) {
+    if (isGameOver()) {
         return { fen: null, grid: [] }; // Return null to signal stop
     }
 
@@ -345,6 +646,18 @@ function parseBoardToFEN(board) {
                 }
             }
 
+            // Priority 5: IMG tag detection (For specialized sets/Arcade)
+            if (!color) {
+                const img = el.tagName === 'IMG' ? el : el.querySelector('img');
+                if (img && img.src) {
+                    const srcMatch = img.src.match(/([wb])_?([prnbqk])\.(png|svg|jpg|webp)/i);
+                    if (srcMatch) {
+                        color = srcMatch[1].toLowerCase();
+                        type = srcMatch[2].toLowerCase();
+                    }
+                }
+            }
+
             if (color && type) {
                 if (color === 'w') type = type.toUpperCase();
                 grid[7 - rank][file] = type;
@@ -377,8 +690,15 @@ function parseBoardToFEN(board) {
         fenRows.push(rowStr);
     }
 
+    // Check if board is completely empty (Loading/Transition)
+    const hasPieces = grid.some(row => row.some(p => p !== null));
+    if (!hasPieces) {
+        return { fen: null, grid: [] };
+    }
+
     if (!whiteKingFound || !blackKingFound) {
         console.warn("Solver: KINGS MISSING! Grid dump:", grid);
+        return { fen: null, grid: [] }; // Abort if invalid board state
     }
 
     return {
@@ -395,6 +715,13 @@ function getOverlay() {
     if (!boardElement) return null;
 
     let container = document.getElementById(OVERLAY_ID);
+
+    // Check if existing overlay is orphaned (not in current board)
+    if (container && !boardElement.contains(container)) {
+        container.remove();
+        container = null;
+    }
+
     if (!container) {
         container = document.createElement('div');
         container.id = OVERLAY_ID;
@@ -433,25 +760,29 @@ function highlightMove(move, altMoves = []) {
     if (!move || move.length < 4) return;
     if (!boardElement) return;
 
+    // Game Over check to prevent drawing on finished game
+    if (document.querySelector('.game-over-modal') || document.querySelector('.modal-game-over') || document.querySelector('div[class*="game-over"]')) {
+        return;
+    }
+
     if (!isVisualsHidden) {
         const container = getOverlay(); // Creates new if removed
         if (container) {
-            // Draw Best Move
+            // Draw Best Move (Green Arrow)
             const from = move.substring(0, 2);
             const to = move.substring(2, 4);
-            createHighlight(container, from, 'from', isFlipped);
-            createHighlight(container, to, 'to', isFlipped);
-            drawArrow(container, from, to, isFlipped);
+            console.log(`Solver: Drawing arrow ${from}->${to}, isFlipped=${isFlipped}, playerColor=${playerColor}`);
+            drawArrow(container, from, to, isFlipped, '#00e600'); // Matrix Green
 
-            // Draw Alt Moves (+)
+            // Draw Alt Moves (Yellow Arrows)
             if (altMoves && altMoves.length > 0) {
-                // Limit to top 1 alternative to reduce clutter
-                altMoves.slice(0, 1).forEach(m => {
+                // Limit to top 2 alternatives to provide variety without clutter
+                altMoves.slice(0, 2).forEach(m => {
                     if (m !== move && m.length >= 4) {
+                        const altFrom = m.substring(0, 2);
                         const altTo = m.substring(2, 4);
-                        // Only draw if not overlapping the main best move
-                        if (altTo !== to) {
-                            createHighlight(container, altTo, 'alt', isFlipped);
+                        if (altTo !== to || altFrom !== from) {
+                            drawArrow(container, altFrom, altTo, isFlipped, '#ffcc00'); // Yellow
                         }
                     }
                 });
@@ -463,79 +794,32 @@ function highlightMove(move, altMoves = []) {
         const rect = boardElement.getBoundingClientRect();
         const squareSize = rect.width / 8;
 
-        console.log(`Solver: Auto Move Initiated. Turn: ${currentTurn}`);
+
         const from = move.substring(0, 2);
         const to = move.substring(2, 4);
 
-        // Random delay: 0.5s to 1.5s
-        const randomDelay = 500 + Math.random() * 1000;
+        // Random delay using user settings
+        const randomDelay = minDelay + Math.random() * (maxDelay - minDelay);
 
         setTimeout(() => {
-            simulateMove(from, to, isFlipped, rect, squareSize);
+            // Check if game ended during delay
+            if (isGameOver()) {
+                console.log("Solver: Auto-move cancelled - Game Over");
+                return;
+            }
+            simulateMove(from, to, isFlipped, null, null);
         }, randomDelay);
     }
 }
 
 function createHighlight(container, square, type, isFlipped) {
-    const fileMap = { a: 1, b: 2, c: 3, d: 4, e: 5, f: 6, g: 7, h: 8 };
-    const f = fileMap[square[0]];
-    const r = parseInt(square[1]);
-
-    let col, row;
-    if (!isFlipped) {
-        col = f - 1;
-        row = 8 - r;
-    } else {
-        col = 8 - f;
-        row = r - 1;
-    }
-
-    const overlay = document.createElement('div');
-    overlay.style.position = 'absolute';
-    overlay.style.left = `${col * 12.5}%`;
-    overlay.style.top = `${row * 12.5}%`;
-    overlay.style.width = '12.5%';
-    overlay.style.height = '12.5%';
-    overlay.style.display = 'flex';
-    overlay.style.alignItems = 'center';
-    overlay.style.justifyContent = 'center';
-    overlay.style.pointerEvents = 'none';
-
-    if (type === 'from') {
-        overlay.style.backgroundColor = 'rgba(255, 255, 0, 0.4)'; // Faded yellow
-        overlay.style.borderRadius = '50%';
-        container.appendChild(overlay);
-    } else {
-        const text = document.createElement('div');
-        text.style.fontWeight = 'bold';
-        text.style.fontFamily = 'Arial, sans-serif';
-        text.style.display = 'flex';
-        text.style.alignItems = 'center';
-        text.style.justifyContent = 'center';
-        text.style.width = '100%';
-        text.style.height = '100%';
-
-        if (type === 'to') {
-            text.innerText = 'X';
-            text.style.color = '#00e600'; // Matrix Green
-            text.style.fontSize = 'clamp(20px, 6vw, 60px)'; // Big
-            text.style.opacity = '0.9';
-            text.style.textShadow = '0 0 5px black';
-        } else if (type === 'alt') {
-            text.innerText = '+';
-            text.style.color = '#ffffff'; // White/Gray
-            text.style.fontSize = 'clamp(20px, 6vw, 60px)'; // Same size as X
-            text.style.opacity = '0.4'; // Faded ("mờ mờ")
-            text.style.textShadow = '0 0 2px black';
-        }
-        overlay.appendChild(text);
-        container.appendChild(overlay);
-    }
+    // Disabled as per user request (Arrows Only)
 }
 
-function drawArrow(container, from, to, isFlipped) {
+function drawArrow(container, from, to, isFlipped, color = '#00e600') {
     let svg = container.querySelector('svg');
     const svgNs = "http://www.w3.org/2000/svg";
+
     if (!svg) {
         svg = document.createElementNS(svgNs, "svg");
         svg.style.position = "absolute";
@@ -546,19 +830,27 @@ function drawArrow(container, from, to, isFlipped) {
         svg.style.pointerEvents = "none";
         svg.setAttribute('viewBox', '0 0 8 8');
 
+        // Create Definitions for markers of different colors
         const defs = document.createElementNS(svgNs, "defs");
-        const marker = document.createElementNS(svgNs, "marker");
-        marker.setAttribute("id", "arrowhead");
-        marker.setAttribute("markerWidth", "4");
-        marker.setAttribute("markerHeight", "4");
-        marker.setAttribute("refX", "2");
-        marker.setAttribute("refY", "2");
-        marker.setAttribute("orient", "auto");
-        const path = document.createElementNS(svgNs, "path");
-        path.setAttribute("d", "M0,0 L4,2 L0,4");
-        path.setAttribute("fill", "orange");
-        marker.appendChild(path);
-        defs.appendChild(marker);
+
+        const createMarker = (id, color) => {
+            const marker = document.createElementNS(svgNs, "marker");
+            marker.setAttribute("id", id);
+            marker.setAttribute("markerWidth", "4");
+            marker.setAttribute("markerHeight", "4");
+            marker.setAttribute("refX", "2");
+            marker.setAttribute("refY", "2");
+            marker.setAttribute("orient", "auto");
+            const path = document.createElementNS(svgNs, "path");
+            path.setAttribute("d", "M0,0 L4,2 L0,4");
+            path.setAttribute("fill", color);
+            marker.appendChild(path);
+            return marker;
+        };
+
+        defs.appendChild(createMarker("arrow-green", "#00e600"));
+        defs.appendChild(createMarker("arrow-yellow", "#ffcc00"));
+
         svg.appendChild(defs);
         container.appendChild(svg);
     }
@@ -567,6 +859,10 @@ function drawArrow(container, from, to, isFlipped) {
         const fileMap = { a: 1, b: 2, c: 3, d: 4, e: 5, f: 6, g: 7, h: 8 };
         const f = fileMap[sq[0]];
         const r = parseInt(sq[1]);
+        if (!f || !r || isNaN(f) || isNaN(r)) {
+            console.warn("Solver: drawArrow Invalid Coords", sq, f, r);
+            return { x: 0, y: 0 };
+        }
         if (!isFlipped) {
             return { x: (f - 1) + 0.5, y: (8 - r) + 0.5 };
         } else {
@@ -582,29 +878,70 @@ function drawArrow(container, from, to, isFlipped) {
     line.setAttribute("y1", c1.y);
     line.setAttribute("x2", c2.x);
     line.setAttribute("y2", c2.y);
-    line.setAttribute("stroke", "orange");
+    line.setAttribute("stroke", color);
     line.setAttribute("stroke-width", "0.15");
-    line.setAttribute("stroke-opacity", "0.8");
-    line.setAttribute("marker-end", "url(#arrowhead)");
+    line.setAttribute("stroke-opacity", "0.9");
+
+    // Choose marker based on color
+    const markerId = color === '#00e600' ? 'arrow-green' : 'arrow-yellow';
+    line.setAttribute("marker-end", `url(#${markerId})`);
 
     svg.appendChild(line);
 }
 
-function simulateMove(from, to, isFlipped, rect, squareSize) {
+function simulateMove(from, to, isFlipped, ignoredRect, ignoredSquareSize) {
+    // REFRESH COORDINATES: Rect passed from outside is likely stale due to debounce/timeouts
+    if (!boardElement) return;
+    const rect = boardElement.getBoundingClientRect();
+    const squareSize = rect.width / 8;
+
+    // Center point adjustment (0.5 is center).
+    // Use 0.25 (25%) to grab VERY HIGH on 3D pieces to prevent "slipping down"
+    const CENTER_OFFSET = 0.25;
+    // NEW: DOM-based coordinate lookup (pixel-perfect) with RANDOM OFFSET for human-like behavior
     const getCoords = (sq) => {
         const fileMap = { a: 1, b: 2, c: 3, d: 4, e: 5, f: 6, g: 7, h: 8 };
         const f = fileMap[sq[0]];
         const r = parseInt(sq[1]);
         if (!f || !r) return { x: NaN, y: NaN };
 
+        // Random offset: ±5% of square size for X only (small variance for anti-detection)
+        const randomOffsetX = () => (Math.random() - 0.5) * 0.1; // -0.05 to +0.05
+
+        // Special handling for VISUAL bottom row - pieces often extend below square
+        // If NOT flipped (White): bottom row = rank 1
+        // If flipped (Black): bottom row = rank 8
+        const isVisualBottomRow = isFlipped ? (r === 8) : (r === 1);
+        const yOffset = isVisualBottomRow ? 0.15 : CENTER_OFFSET; // Grab higher on bottom row
+
+        // Build the square class name
+        const squareClass = `square-${f}${r}`;
+
+        // Try to find the piece on this square first
+        let targetEl = boardElement.querySelector(`.piece.${squareClass}`);
+
+        // Fallback to the square itself
+        if (!targetEl) {
+            targetEl = boardElement.querySelector(`.${squareClass}`);
+        }
+
+        if (targetEl) {
+            const elRect = targetEl.getBoundingClientRect();
+            // Click near center - X has small random, Y is fixed for accuracy
+            return {
+                x: elRect.left + elRect.width * (0.5 + randomOffsetX()) + window.scrollX,
+                y: elRect.top + elRect.height * yOffset + window.scrollY
+            };
+        }
+
+        // Fallback to calculated (old method)
         let left, top;
-        // Target center
         if (!isFlipped) {
-            left = (f - 1) * squareSize + (squareSize / 2);
-            top = (8 - r) * squareSize + (squareSize / 2);
+            left = (f - 1) * squareSize + squareSize * (0.5 + randomOffsetX());
+            top = (8 - r) * squareSize + squareSize * yOffset;
         } else {
-            left = (8 - f) * squareSize + (squareSize / 2);
-            top = (r - 1) * squareSize + (squareSize / 2);
+            left = (8 - f) * squareSize + squareSize * (0.5 + randomOffsetX());
+            top = (r - 1) * squareSize + squareSize * yOffset;
         }
         return {
             x: rect.left + window.scrollX + left,
@@ -614,6 +951,8 @@ function simulateMove(from, to, isFlipped, rect, squareSize) {
 
     const fromCoords = getCoords(from);
     const toCoords = getCoords(to);
+
+
 
     if (!Number.isFinite(fromCoords.x) || !Number.isFinite(fromCoords.y) ||
         !Number.isFinite(toCoords.x) || !Number.isFinite(toCoords.y)) {
@@ -641,16 +980,55 @@ function simulateMove(from, to, isFlipped, rect, squareSize) {
     const startX = fromCoords.x - window.scrollX;
     const startY = fromCoords.y - window.scrollY;
 
-    // Robust Source Finding
+    // Robust Source Finding - Distance Based
     const els = document.elementsFromPoint(startX, startY);
-    const sourceEl = els.find(e => {
-        const c = String(e.className || "");
-        return !c.includes('solver') && (c.includes('piece') || c.includes('drag') || c.includes('square'));
-    }) || els[0];
 
-    if (!sourceEl) { console.warn("Solver: Source not found for auto-move"); return; }
+    // Sort by distance to center (Fix for 3D pieces overlapping)
+    const sorted = els.map(e => {
+        const r = e.getBoundingClientRect();
+        // Calculate center of element
+        const centerX = r.left + r.width / 2;
+        const centerY = r.top + r.height / 2;
+        // Distance to click point
+        const dist = Math.hypot(centerX - startX, centerY - startY);
+        return { el: e, dist: dist };
+    }).sort((a, b) => a.dist - b.dist);
 
-    console.log("Solver: Dragging element", sourceEl);
+    // PRIORITY 1: Find a PIECE (drag target)
+    let sourceEntry = sorted.find(entry => {
+        const c = String(entry.el.className || "");
+        return !c.includes('solver') && !c.includes('highlight') && (c.includes('piece') || c.includes('drag'));
+    });
+
+    // PRIORITY 2: Find a SQUARE (fallback)
+    if (!sourceEntry) {
+        sourceEntry = sorted.find(entry => {
+            const c = String(entry.el.className || "");
+            return !c.includes('solver') && c.includes('square');
+        });
+    }
+
+    let sourceEl = sourceEntry ? sourceEntry.el : els[0];
+
+    // PRIORITY 3: Direct DOM lookup if still not found
+    if (!sourceEl && boardElement) {
+        const fileMap = { a: 1, b: 2, c: 3, d: 4, e: 5, f: 6, g: 7, h: 8 };
+        const f = fileMap[from[0]];
+        const r = parseInt(from[1]);
+        const squareClass = `square-${f}${r}`;
+
+        // Try piece first, then square
+        sourceEl = boardElement.querySelector(`.piece.${squareClass}`) ||
+            boardElement.querySelector(`.${squareClass}`);
+    }
+
+    if (!sourceEl) {
+        console.warn("Solver: Source not found for auto-move at", from);
+        return;
+    }
+
+    // Debug Log for User Feedback
+
 
     // ACTION SEQUENCE
     // 1. Hover & Enter
@@ -660,14 +1038,25 @@ function simulateMove(from, to, isFlipped, rect, squareSize) {
     // 2. Grab (Down)
     dispatchAll(sourceEl, 'down', startX, startY, 1);
 
-    const dragDuration = 250 + Math.random() * 200;
+    // Calculate drag distance
+    const dragDistancePixels = Math.hypot(toCoords.x - fromCoords.x, toCoords.y - fromCoords.y);
+    const isShortMove = dragDistancePixels < (rect.width / 8) * 1.5; // Less than 1.5 squares
 
-    // 3. Drag Step (Move slightly) - Critical for detection
-    setTimeout(() => {
-        const midX = (fromCoords.x + toCoords.x) / 2 - window.scrollX;
-        const midY = (fromCoords.y + toCoords.y) / 2 - window.scrollY;
-        dispatchAll(sourceEl, 'move', midX, midY, 1);
-    }, dragDuration / 2);
+    // Longer duration for short moves to ensure detection
+    const dragDuration = isShortMove ? 250 + Math.random() * 50 : 150 + Math.random() * 50;
+
+
+
+    // 3. Multiple Drag Steps for better detection
+    const steps = isShortMove ? 3 : 2; // More steps for short moves
+    for (let i = 1; i <= steps; i++) {
+        setTimeout(() => {
+            const progress = i / (steps + 1);
+            const stepX = fromCoords.x + (toCoords.x - fromCoords.x) * progress - window.scrollX;
+            const stepY = fromCoords.y + (toCoords.y - fromCoords.y) * progress - window.scrollY;
+            dispatchAll(sourceEl, 'move', stepX, stepY, 1);
+        }, (dragDuration / (steps + 1)) * i);
+    }
 
     // 4. Drop (At Destination)
     setTimeout(() => {
@@ -680,22 +1069,39 @@ function simulateMove(from, to, isFlipped, rect, squareSize) {
             return !c.includes('solver') && !c.includes('highlight') && (c.includes('piece') || c.includes('square'));
         }) || destEls[0] || sourceEl;
 
+        // Extra move event right before drop
         dispatchAll(destEl, 'move', endX, endY, 1);
-        dispatchAll(destEl, 'up', endX, endY, 0);
 
-        // 5. Finalize with Click (Fallback)
-        destEl.dispatchEvent(new MouseEvent('click', {
-            bubbles: true, cancelable: true, view: window,
-            clientX: endX, clientY: endY, buttons: 0
-        }));
+        // Small delay then release
+        setTimeout(() => {
+            dispatchAll(destEl, 'up', endX, endY, 0);
+
+            // 5. Finalize with Click (Fallback for short moves)
+            if (isShortMove) {
+                setTimeout(() => {
+                    destEl.dispatchEvent(new MouseEvent('click', {
+                        bubbles: true, cancelable: true, view: window,
+                        clientX: endX, clientY: endY, buttons: 0
+                    }));
+                }, 50);
+            }
+        }, 20);
     }, dragDuration);
 }
 
-function removeHighlights() {
-    const existing = document.querySelectorAll('.solver-highlight');
-    existing.forEach(el => el.remove());
-    const existingArrows = document.querySelectorAll('.solver-arrow');
-    existingArrows.forEach(el => el.remove());
+function hardReset() {
+
+    boardElement = null;
+    lastFen = "";
+    lastGrid = null;
+    currentTurn = 'w'; // Default back to white or let detection fix it
+    if (observer) observer.disconnect();
+    if (moveListObserver) moveListObserver.disconnect();
+    removeHighlights();
+
+    // Explicitly re-run start sequence
+    startBoardObserver();
+    startMoveListObserver();
 }
 
 function addResetButton() {
@@ -719,10 +1125,15 @@ function addResetButton() {
 
     btn.onclick = () => {
         console.log("Solver: Manual Reset Triggered");
-        lastFen = "";
-        analyzeBoard();
-        btn.innerText = 'Checking...';
-        setTimeout(() => btn.innerText = '↺ Reset', 1000);
+        btn.innerText = '♻️ Rebooting...';
+        btn.style.backgroundColor = '#e67e22'; // Orange
+
+        forceRestart();
+
+        setTimeout(() => {
+            btn.innerText = '↺ Reset';
+            btn.style.backgroundColor = '#2ecc71';
+        }, 1000);
     };
 
     document.body.appendChild(btn);

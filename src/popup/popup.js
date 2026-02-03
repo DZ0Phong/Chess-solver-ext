@@ -6,8 +6,20 @@ document.addEventListener('DOMContentLoaded', () => {
     const statusText = document.getElementById('status-text');
     const engineStatus = document.getElementById('engine-status');
 
+    // Speed Mode Elements
+    const speedModeSelect = document.getElementById('speed-mode-select');
+    const minDelayInput = document.getElementById('min-delay');
+    const maxDelayInput = document.getElementById('max-delay');
+
+    // Default delay presets for each mode (in ms)
+    const DELAY_PRESETS = {
+        gm: { min: 300, max: 800 },       // Bullet 1min
+        master: { min: 800, max: 2000 },  // Rapid 3-5min (default)
+        analysis: { min: 500, max: 1200 } // Quick hints
+    };
+
     // Load saved state
-    chrome.storage.local.get(['solverEnabled', 'autoMoveEnabled', 'hideVisuals'], (result) => {
+    chrome.storage.local.get(['solverEnabled', 'autoMoveEnabled', 'hideVisuals', 'speedMode', 'minDelay', 'maxDelay'], (result) => {
         if (result.solverEnabled) {
             updateUI(true);
         }
@@ -18,12 +30,19 @@ document.addEventListener('DOMContentLoaded', () => {
             enableVisualsControl(false);
         }
 
-        // Fix Persistence: Check hideVisuals only if autoMove is enabled, or simply load it regardless 
-        // (but effective only if autoMove is ON visually).
-        // User logic: "hide visuals" is an option available ONLY when auto move is ON.
+        // Fix Persistence: Check hideVisuals only if autoMove is enabled
         if (result.hideVisuals && result.autoMoveEnabled) {
             hideVisualsCheck.checked = true;
         }
+
+        // Load speed mode settings
+        const savedMode = result.speedMode || 'master';
+        speedModeSelect.value = savedMode;
+
+        // Load delay values (use saved or default for mode)
+        const presets = DELAY_PRESETS[savedMode];
+        minDelayInput.value = result.minDelay ?? presets.min;
+        maxDelayInput.value = result.maxDelay ?? presets.max;
     });
 
     // Listen for Engine Status
@@ -65,6 +84,46 @@ document.addEventListener('DOMContentLoaded', () => {
             notifyContentScript({ type: "TOGGLE_VISUALS", hidden: isHidden });
         });
     });
+
+    // Speed Mode Change
+    speedModeSelect.addEventListener('change', (e) => {
+        const mode = e.target.value;
+        const presets = DELAY_PRESETS[mode];
+
+        // Update inputs with new presets
+        minDelayInput.value = presets.min;
+        maxDelayInput.value = presets.max;
+
+        // Save and notify
+        chrome.storage.local.set({
+            speedMode: mode,
+            minDelay: presets.min,
+            maxDelay: presets.max
+        }, () => {
+            notifyContentScript({
+                type: "UPDATE_DELAY_SETTINGS",
+                minDelay: presets.min,
+                maxDelay: presets.max
+            });
+        });
+    });
+
+    // Delay Input Changes (custom values)
+    const saveDelaySettings = () => {
+        const minDelay = parseInt(minDelayInput.value) || 500;
+        const maxDelay = parseInt(maxDelayInput.value) || 1500;
+
+        chrome.storage.local.set({ minDelay, maxDelay }, () => {
+            notifyContentScript({
+                type: "UPDATE_DELAY_SETTINGS",
+                minDelay,
+                maxDelay
+            });
+        });
+    };
+
+    minDelayInput.addEventListener('change', saveDelaySettings);
+    maxDelayInput.addEventListener('change', saveDelaySettings);
 
     function updateUI(enabled) {
         if (enabled) {

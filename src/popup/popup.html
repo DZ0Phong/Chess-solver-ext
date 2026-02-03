@@ -50,6 +50,28 @@
                     <span class="slider"></span>
                 </label>
             </div>
+            
+            <!-- Speed Mode Selector -->
+            <div id="speed-mode-control" class="switch-container">
+                <span class="switch-label">Speed Mode</span>
+                <select id="speed-mode-select" class="mode-select">
+                    <option value="gm">⚡ GM (Bullet 1min)</option>
+                    <option value="master" selected>🎯 Master (Rapid 3-5min)</option>
+                    <option value="analysis">🔍 Analysis (Hints Only)</option>
+                </select>
+            </div>
+            
+            <!-- Delay Settings -->
+            <div id="delay-settings" class="delay-panel">
+                <div class="delay-row">
+                    <span>Min Delay (ms)</span>
+                    <input type="number" id="min-delay" value="800" min="100" max="5000" step="100">
+                </div>
+                <div class="delay-row">
+                    <span>Max Delay (ms)</span>
+                    <input type="number" id="max-delay" value="2000" min="200" max="10000" step="100">
+                </div>
+            </div>
         </div>
 
         <div class="footer">

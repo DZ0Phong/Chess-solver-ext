@@ -229,3 +229,60 @@ input:checked + .slider:before {
     pointer-events: none;
     transition: opacity 0.3s;
 }
+
+/* Speed Mode Selector */
+.mode-select {
+    background: #2a2a2a;
+    color: var(--text-color);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    border-radius: 6px;
+    padding: 6px 10px;
+    font-size: 12px;
+    cursor: pointer;
+    outline: none;
+}
+
+.mode-select:hover {
+    border-color: var(--primary-color);
+}
+
+.mode-select:focus {
+    border-color: var(--success);
+}
+
+/* Delay Settings Panel */
+.delay-panel {
+    background: rgba(0, 0, 0, 0.3);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 8px;
+    padding: 12px;
+}
+
+.delay-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 8px;
+    font-size: 12px;
+    color: var(--text-dim);
+}
+
+.delay-row:last-child {
+    margin-bottom: 0;
+}
+
+.delay-row input[type="number"] {
+    width: 80px;
+    background: #2a2a2a;
+    color: var(--text-color);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    border-radius: 4px;
+    padding: 4px 8px;
+    font-size: 12px;
+    text-align: right;
+}
+
+.delay-row input[type="number"]:focus {
+    outline: none;
+    border-color: var(--primary-color);
+}
