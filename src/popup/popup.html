@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <title>Chess Solver</title>
+    <link rel="stylesheet" href="popup.css">
+</head>
+
+<body>
+    <div class="container">
+        <header>
+            <div class="logo-container">
+                <img src="../assets/icon.png" alt="Logo" class="logo-img">
+            </div>
+            <h1>Grandmaster AI</h1>
+            <div class="subtitle">Real-time Stockfish Assistance</div>
+        </header>
+
+        <div class="status-panel">
+            <div class="status-row">
+                <span class="status-label">Engine Status</span>
+                <span id="engine-status" class="status-value loading">Initializing...</span>
+            </div>
+            <div class="status-row">
+                <span class="status-label">Solver Status</span>
+                <span id="status-text" class="status-value inactive">Inactive</span>
+            </div>
+        </div>
+
+        <div class="controls">
+            <!-- Main Toggle -->
+            <button id="toggle-btn" class="main-btn">Activate Solver</button>
+
+            <!-- Auto Move Toggle -->
+            <div class="switch-container">
+                <span class="switch-label">Auto Move</span>
+                <label class="switch">
+                    <input type="checkbox" id="auto-move-check">
+                    <span class="slider"></span>
+                </label>
+            </div>
+
+            <!-- Stealth Mode Toggle (Dependent on Auto Move via JS logic mostly, or independent) -->
+            <!-- User logic: "if auto move enabled, can hide visuals" -->
+            <div id="visuals-control" class="switch-container disabled-control">
+                <span class="switch-label">Stealth Mode (Hide UI)</span>
+                <label class="switch">
+                    <input type="checkbox" id="hide-visuals-check">
+                    <span class="slider"></span>
+                </label>
+            </div>
+        </div>
+
+        <div class="footer">
+            <div class="badge">Version 1.2 • WASM Powered</div>
+        </div>
+    </div>
+    <script src="popup.js"></script>
+</body>
+
+</html>

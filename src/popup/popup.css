@@ -1,0 +1,231 @@
+:root {
+  --primary-color: #f1c40f; /* Gold */
+  --primary-hover: #d4ac0d;
+  --bg-color: #1a1a1a;
+  --panel-bg: rgba(255, 255, 255, 0.05);
+  --text-color: #ecf0f1;
+  --text-dim: #bdc3c7;
+  --success: #2ecc71;
+  --danger: #e74c3c;
+  --glass-border: 1px solid rgba(255, 255, 255, 0.1);
+  --glass-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
+}
+
+body {
+  width: 320px;
+  margin: 0;
+  padding: 0;
+  font-family: 'Segoe UI', Roboto, sans-serif;
+  background-color: var(--bg-color);
+  color: var(--text-color);
+  overflow: hidden;
+}
+
+.container {
+  padding: 20px;
+  background: linear-gradient(135deg, #1e1e1e, #2d2d2d);
+  min-height: 400px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+/* Header */
+header {
+  text-align: center;
+  margin-bottom: 25px;
+  width: 100%;
+}
+
+.logo-container {
+  margin-bottom: 10px;
+  position: relative;
+  display: inline-block;
+}
+
+.logo-img {
+  width: 64px;
+  height: 64px;
+  filter: drop-shadow(0 0 10px rgba(241, 196, 15, 0.3));
+}
+
+h1 {
+  font-size: 20px;
+  font-weight: 600;
+  margin: 0;
+  background: linear-gradient(90deg, #fff, #bdc3c7);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+
+.subtitle {
+  font-size: 11px;
+  color: var(--text-dim);
+  margin-top: 5px;
+}
+
+/* Status Panel */
+.status-panel {
+  width: 100%;
+  background: var(--panel-bg);
+  backdrop-filter: blur(10px);
+  border: var(--glass-border);
+  border-radius: 12px;
+  padding: 15px;
+  margin-bottom: 20px;
+  box-shadow: var(--glass-shadow);
+  text-align: center;
+}
+
+.status-row {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 8px;
+  font-size: 13px;
+}
+
+.status-label {
+  color: var(--text-dim);
+}
+
+.status-value {
+  font-weight: 600;
+  color: var(--text-color);
+}
+
+.status-value.active { color: var(--success); }
+.status-value.inactive { color: var(--danger); }
+.status-value.loading { color: var(--primary-color); }
+
+/* Controls */
+.controls {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 15px;
+}
+
+/* Toggle Switch Style */
+.switch-container {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  background: var(--panel-bg);
+  padding: 12px;
+  border-radius: 8px;
+  border: var(--glass-border);
+}
+
+.switch-label {
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.switch {
+  position: relative;
+  display: inline-block;
+  width: 44px;
+  height: 24px;
+}
+
+.switch input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.slider {
+  position: absolute;
+  cursor: pointer;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: #4a4a4a;
+  transition: .4s;
+  border-radius: 24px;
+}
+
+.slider:before {
+  position: absolute;
+  content: "";
+  height: 18px;
+  width: 18px;
+  left: 3px;
+  bottom: 3px;
+  background-color: white;
+  transition: .4s;
+  border-radius: 50%;
+  box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+}
+
+input:checked + .slider {
+  background-color: var(--success);
+}
+
+input:checked + .slider:before {
+  transform: translateX(20px);
+}
+
+/* Main Main Button */
+.main-btn {
+  width: 100%;
+  padding: 14px;
+  border: none;
+  border-radius: 10px;
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  background: linear-gradient(145deg, var(--primary-color), var(--primary-hover));
+  color: #1a1a1a;
+  box-shadow: 0 4px 15px rgba(241, 196, 15, 0.3);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.main-btn:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 20px rgba(241, 196, 15, 0.4);
+}
+
+.main-btn:active {
+  transform: translateY(1px);
+}
+
+.main-btn.active-state {
+  background: linear-gradient(145deg, #e74c3c, #c0392b);
+  color: white;
+  box-shadow: 0 4px 15px rgba(231, 76, 60, 0.3);
+}
+
+.main-btn.active-state:hover {
+  box-shadow: 0 6px 20px rgba(231, 76, 60, 0.4);
+}
+
+/* Footer/Badge */
+.footer {
+  margin-top: auto;
+  padding-top: 20px;
+  font-size: 10px;
+  color: #555;
+  text-align: center;
+  width: 100%;
+}
+
+.badge {
+  background: rgba(255,255,255,0.05);
+  padding: 4px 8px;
+  border-radius: 4px;
+  display: inline-block;
+  backdrop-filter: blur(5px);
+}
+
+/* Disabled State for Visuals */
+.disabled-control {
+    opacity: 0.4;
+    pointer-events: none;
+    transition: opacity 0.3s;
+}
