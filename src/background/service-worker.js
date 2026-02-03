@@ -39,7 +39,10 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     if (request.type === "ENGINE_RESPONSE") {
         console.log("Best move from offscreen:", request.bestMove);
         if (currentResponseCallback) {
-            currentResponseCallback({ bestMove: request.bestMove });
+            currentResponseCallback({
+                bestMove: request.bestMove,
+                topMoves: request.topMoves
+            });
             currentResponseCallback = null;
         }
     }

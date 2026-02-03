@@ -54,6 +54,7 @@ function enableSolver() {
     if (isEnabled) return;
     isEnabled = true;
     console.log("Solver: Enabled");
+    addResetButton();
     startBoardObserver();
     startMoveListObserver(); // Start watching moves specifically
     startPoller(); // Start failsafe
@@ -62,6 +63,7 @@ function enableSolver() {
 function disableSolver() {
     isEnabled = false;
     console.log("Solver: Disabled");
+    removeResetButton();
     if (observer) {
         observer.disconnect();
         observer = null;
@@ -198,7 +200,7 @@ function analyzeBoard() {
             fen: correctFen
         }, (response) => {
             if (response && response.bestMove) {
-                highlightMove(response.bestMove);
+                highlightMove(response.bestMove, response.topMoves);
             }
         });
     } catch (e) {
@@ -274,18 +276,76 @@ function isBlackPiece(p) { return 'pnbrqk'.includes(p); }
 // --- FEN Parsing ---
 
 function parseBoardToFEN(board) {
+    // 0. Game Over Check - Stop analyzing if game is done
+    if (document.querySelector('.game-over-modal') || document.querySelector('.modal-game-over') || document.querySelector('div[class*="game-over"]')) {
+        return { fen: null, grid: [] }; // Return null to signal stop
+    }
+
     const grid = Array(8).fill(null).map(() => Array(8).fill(null));
-    const pieces = board.querySelectorAll('.piece');
-    pieces.forEach(piece => {
-        const classNames = piece.className;
-        const squareMatch = classNames.match(/square-(\d)(\d)/);
+
+    // Strategy: Broadest search
+    let elements = board.querySelectorAll('.piece');
+    if (elements.length === 0) {
+        // Broad search for anything positioned
+        elements = board.querySelectorAll('[class*="square-"]');
+    }
+
+    elements.forEach(el => {
+        const cls = (el.className && typeof el.className === 'string') ? el.className : "";
+        if (!cls) return;
+        if (cls.includes('highlight') || cls.includes('hint') || cls.includes('hover') || cls.includes('fade')) return;
+
+        // Coordinates
+        const squareMatch = cls.match(/square-(\d)(\d)/);
         if (squareMatch) {
             const file = parseInt(squareMatch[1], 10) - 1;
             const rank = parseInt(squareMatch[2], 10) - 1;
-            const typeMatch = classNames.match(/\b([wb])([prnbqk])\b/);
-            if (typeMatch) {
-                const color = typeMatch[1];
-                let type = typeMatch[2];
+
+            let color = null;
+            let type = null;
+
+            // Priority 1: data-piece attribute (e.g. "wP", "bK")
+            const dataPiece = el.getAttribute('data-piece');
+            if (dataPiece && dataPiece.length === 2) {
+                color = dataPiece[0];
+                type = dataPiece[1].toLowerCase();
+            }
+
+            // Priority 2: Standard Class (wp, bk)
+            if (!color) {
+                const shortMatch = cls.match(/\b([wb])([prnbqk])\b/);
+                if (shortMatch) {
+                    color = shortMatch[1];
+                    type = shortMatch[2];
+                }
+            }
+
+            // Priority 3: Long Class (white pawn)
+            if (!color) {
+                const colorMatch = cls.match(/\b(white|black)\b/);
+                const typeMatch = cls.match(/\b(pawn|rook|knight|bishop|queen|king)\b/);
+                if (colorMatch && typeMatch) {
+                    color = colorMatch[1][0];
+                    const map = { pawn: 'p', rook: 'r', knight: 'n', bishop: 'b', queen: 'q', king: 'k' };
+                    type = map[typeMatch[1]];
+                }
+            }
+
+            // Priority 4: Background Image URL (last resort for custom themes)
+            if (!color) {
+                const style = window.getComputedStyle(el);
+                const bg = style.backgroundImage || "";
+                if (bg && bg !== 'none') {
+                    // url(".../wp.png") or ".../b_k.svg"
+                    const bgMatch = bg.match(/([wb])_?([prnbqk])\.(png|svg|jpg|webp)/i);
+                    if (bgMatch) {
+                        color = bgMatch[1].toLowerCase();
+                        type = bgMatch[2].toLowerCase();
+                    }
+                }
+            }
+
+            if (color && type) {
                 if (color === 'w') type = type.toUpperCase();
                 grid[7 - rank][file] = type;
             }
@@ -293,6 +353,9 @@ function parseBoardToFEN(board) {
     });
 
     let fenRows = [];
+    let whiteKingFound = false;
+    let blackKingFound = false;
+
     for (let row = 0; row < 8; row++) {
         let emptyCount = 0;
         let rowStr = "";
@@ -304,6 +367,8 @@ function parseBoardToFEN(board) {
                     emptyCount = 0;
                 }
                 rowStr += piece;
+                if (piece === 'K') whiteKingFound = true;
+                if (piece === 'k') blackKingFound = true;
             } else {
                 emptyCount++;
             }
@@ -312,157 +377,217 @@ function parseBoardToFEN(board) {
         fenRows.push(rowStr);
     }
 
+    if (!whiteKingFound || !blackKingFound) {
+        console.warn("Solver: KINGS MISSING! Grid dump:", grid);
+    }
+
     return {
         fen: `${fenRows.join('/')} w - - 0 1`,
         grid: grid
     };
 }
 
-// --- Visuals ---
+// --- Visuals (Responsive Overlay) ---
 
-function highlightMove(move) {
+const OVERLAY_ID = 'chess-solver-overlay-main';
+
+function getOverlay() {
+    if (!boardElement) return null;
+
+    let container = document.getElementById(OVERLAY_ID);
+    if (!container) {
+        container = document.createElement('div');
+        container.id = OVERLAY_ID;
+        container.className = 'solver-overlay';
+        container.style.position = 'absolute';
+        container.style.top = '0';
+        container.style.left = '0';
+        container.style.width = '100%';
+        container.style.height = '100%';
+        container.style.pointerEvents = 'none';
+        container.style.zIndex = '1000';
+        boardElement.appendChild(container);
+    }
+    return container;
+}
+
+function removeHighlights() {
+    // 1. Singleton ID Remove
+    const existing = document.getElementById(OVERLAY_ID);
+    if (existing) existing.remove();
+
+    // 2. Class Cleanup (Legacy/Zombie)
+    const orphans = document.querySelectorAll('.solver-overlay');
+    orphans.forEach(el => el.remove());
+
+    const arrows = document.querySelectorAll('.solver-arrow');
+    arrows.forEach(el => el.remove());
+}
+
+function highlightMove(move, altMoves = []) {
     removeHighlights();
     const playerColor = getPlayerColor();
     const isFlipped = playerColor === 'b';
     if (currentTurn !== playerColor) return;
 
     if (!move || move.length < 4) return;
-
-    const from = move.substring(0, 2);
-    const to = move.substring(2, 4);
-
     if (!boardElement) return;
-    const rect = boardElement.getBoundingClientRect();
-    const squareSize = rect.width / 8;
 
     if (!isVisualsHidden) {
-        createHighlight(from, 'from');
-        createHighlight(to, 'to');
-        drawArrow(from, to, isFlipped, rect, squareSize);
+        const container = getOverlay(); // Creates new if removed
+        if (container) {
+            // Draw Best Move
+            const from = move.substring(0, 2);
+            const to = move.substring(2, 4);
+            createHighlight(container, from, 'from', isFlipped);
+            createHighlight(container, to, 'to', isFlipped);
+            drawArrow(container, from, to, isFlipped);
+
+            // Draw Alt Moves (+)
+            if (altMoves && altMoves.length > 0) {
+                // Limit to top 1 alternative to reduce clutter
+                altMoves.slice(0, 1).forEach(m => {
+                    if (m !== move && m.length >= 4) {
+                        const altTo = m.substring(2, 4);
+                        // Only draw if not overlapping the main best move
+                        if (altTo !== to) {
+                            createHighlight(container, altTo, 'alt', isFlipped);
+                        }
+                    }
+                });
+            }
+        }
     }
 
     if (isAutoMoveEnabled) {
+        const rect = boardElement.getBoundingClientRect();
+        const squareSize = rect.width / 8;
+
         console.log(`Solver: Auto Move Initiated. Turn: ${currentTurn}`);
+        const from = move.substring(0, 2);
+        const to = move.substring(2, 4);
+
+        // Random delay: 0.5s to 1.5s
+        const randomDelay = 500 + Math.random() * 1000;
+
         setTimeout(() => {
             simulateMove(from, to, isFlipped, rect, squareSize);
-        }, 200 + Math.random() * 100);
+        }, randomDelay);
     }
 }
 
-function createHighlight(square, type) {
-    if (!boardElement) return null;
-    const isFlipped = getPlayerColor() === 'b';
+function createHighlight(container, square, type, isFlipped) {
     const fileMap = { a: 1, b: 2, c: 3, d: 4, e: 5, f: 6, g: 7, h: 8 };
-    const file = fileMap[square[0]];
-    const rank = parseInt(square[1]);
-    const rect = boardElement.getBoundingClientRect();
-    const squareSize = rect.width / 8;
+    const f = fileMap[square[0]];
+    const r = parseInt(square[1]);
+
+    let col, row;
+    if (!isFlipped) {
+        col = f - 1;
+        row = 8 - r;
+    } else {
+        col = 8 - f;
+        row = r - 1;
+    }
 
     const overlay = document.createElement('div');
-    overlay.className = `solver-highlight highlight-${type}`;
     overlay.style.position = 'absolute';
-    overlay.style.width = `${squareSize}px`;
-    overlay.style.height = `${squareSize}px`;
-    overlay.style.zIndex = '10000';
+    overlay.style.left = `${col * 12.5}%`;
+    overlay.style.top = `${row * 12.5}%`;
+    overlay.style.width = '12.5%';
+    overlay.style.height = '12.5%';
+    overlay.style.display = 'flex';
+    overlay.style.alignItems = 'center';
+    overlay.style.justifyContent = 'center';
     overlay.style.pointerEvents = 'none';
 
     if (type === 'from') {
-        overlay.style.backgroundColor = 'yellow';
+        overlay.style.backgroundColor = 'rgba(255, 255, 0, 0.4)'; // Faded yellow
         overlay.style.borderRadius = '50%';
-        overlay.style.opacity = '0.5';
+        container.appendChild(overlay);
     } else {
-        overlay.style.backgroundColor = 'transparent';
-        overlay.style.display = 'flex';
-        overlay.style.alignItems = 'center';
-        overlay.style.justifyContent = 'center';
-        overlay.style.fontSize = `${squareSize * 0.8}px`;
-        overlay.style.fontWeight = 'bold';
-        overlay.style.color = 'green';
-        overlay.style.textShadow = '0 0 5px white';
-        overlay.innerText = 'X';
+        const text = document.createElement('div');
+        text.style.fontWeight = 'bold';
+        text.style.fontFamily = 'Arial, sans-serif';
+        text.style.display = 'flex';
+        text.style.alignItems = 'center';
+        text.style.justifyContent = 'center';
+        text.style.width = '100%';
+        text.style.height = '100%';
+
+        if (type === 'to') {
+            text.innerText = 'X';
+            text.style.color = '#00e600'; // Matrix Green
+            text.style.fontSize = 'clamp(20px, 6vw, 60px)'; // Big
+            text.style.opacity = '0.9';
+            text.style.textShadow = '0 0 5px black';
+        } else if (type === 'alt') {
+            text.innerText = '+';
+            text.style.color = '#ffffff'; // White/Gray
+            text.style.fontSize = 'clamp(20px, 6vw, 60px)'; // Same size as X
+            text.style.opacity = '0.4'; // Faded ("mờ mờ")
+            text.style.textShadow = '0 0 2px black';
+        }
+        overlay.appendChild(text);
+        container.appendChild(overlay);
     }
-
-    let leftOffset, topOffset;
-    if (!isFlipped) {
-        leftOffset = (file - 1) * squareSize;
-        topOffset = (8 - rank) * squareSize;
-    } else {
-        leftOffset = (8 - file) * squareSize;
-        topOffset = (rank - 1) * squareSize;
-    }
-
-    const finalLeft = rect.left + window.scrollX + leftOffset;
-    const finalTop = rect.top + window.scrollY + topOffset;
-
-    overlay.style.left = `${finalLeft}px`;
-    overlay.style.top = `${finalTop}px`;
-
-    if (!isVisualsHidden) {
-        document.body.appendChild(overlay);
-    }
-    return overlay;
 }
 
-function drawArrow(fromSquare, toSquare, isFlipped, boardRect, squareSize) {
-    const fileMap = { a: 1, b: 2, c: 3, d: 4, e: 5, f: 6, g: 7, h: 8 };
-    const f1 = fileMap[fromSquare[0]];
-    const r1 = parseInt(fromSquare[1]);
-    const f2 = fileMap[toSquare[0]];
-    const r2 = parseInt(toSquare[1]);
+function drawArrow(container, from, to, isFlipped) {
+    let svg = container.querySelector('svg');
+    const svgNs = "http://www.w3.org/2000/svg";
+    if (!svg) {
+        svg = document.createElementNS(svgNs, "svg");
+        svg.style.position = "absolute";
+        svg.style.top = "0";
+        svg.style.left = "0";
+        svg.style.width = "100%";
+        svg.style.height = "100%";
+        svg.style.pointerEvents = "none";
+        svg.setAttribute('viewBox', '0 0 8 8');
 
-    let x1, y1, x2, y2;
-
-    if (!isFlipped) {
-        x1 = (f1 - 1) * squareSize + (squareSize / 2);
-        y1 = (8 - r1) * squareSize + (squareSize / 2);
-        x2 = (f2 - 1) * squareSize + (squareSize / 2);
-        y2 = (8 - r2) * squareSize + (squareSize / 2);
-    } else {
-        x1 = (8 - f1) * squareSize + (squareSize / 2);
-        y1 = (r1 - 1) * squareSize + (squareSize / 2);
-        x2 = (8 - f2) * squareSize + (squareSize / 2);
-        y2 = (r2 - 1) * squareSize + (squareSize / 2);
+        const defs = document.createElementNS(svgNs, "defs");
+        const marker = document.createElementNS(svgNs, "marker");
+        marker.setAttribute("id", "arrowhead");
+        marker.setAttribute("markerWidth", "4");
+        marker.setAttribute("markerHeight", "4");
+        marker.setAttribute("refX", "2");
+        marker.setAttribute("refY", "2");
+        marker.setAttribute("orient", "auto");
+        const path = document.createElementNS(svgNs, "path");
+        path.setAttribute("d", "M0,0 L4,2 L0,4");
+        path.setAttribute("fill", "orange");
+        marker.appendChild(path);
+        defs.appendChild(marker);
+        svg.appendChild(defs);
+        container.appendChild(svg);
     }
 
-    const svgNs = "http://www.w3.org/2000/svg";
-    const svg = document.createElementNS(svgNs, "svg");
-    svg.setAttribute("class", "solver-arrow");
-    svg.style.position = "absolute";
-    svg.style.left = `${boardRect.left + window.scrollX}px`;
-    svg.style.top = `${boardRect.top + window.scrollY}px`;
-    svg.style.width = `${boardRect.width}px`;
-    svg.style.height = `${boardRect.height}px`;
-    svg.style.zIndex = "10001";
-    svg.style.pointerEvents = "none";
-    svg.style.overflow = "visible";
+    const getCoords = (sq) => {
+        const fileMap = { a: 1, b: 2, c: 3, d: 4, e: 5, f: 6, g: 7, h: 8 };
+        const f = fileMap[sq[0]];
+        const r = parseInt(sq[1]);
+        if (!isFlipped) {
+            return { x: (f - 1) + 0.5, y: (8 - r) + 0.5 };
+        } else {
+            return { x: (8 - f) + 0.5, y: (r - 1) + 0.5 };
+        }
+    };
 
-    const defs = document.createElementNS(svgNs, "defs");
-    const marker = document.createElementNS(svgNs, "marker");
-    marker.setAttribute("id", "arrowhead");
-    marker.setAttribute("markerWidth", "6");
-    marker.setAttribute("markerHeight", "4");
-    marker.setAttribute("refX", "5");
-    marker.setAttribute("refY", "2");
-    marker.setAttribute("orient", "auto");
-    const polygon = document.createElementNS(svgNs, "polygon");
-    polygon.setAttribute("points", "0 0, 6 2, 0 4");
-    polygon.setAttribute("fill", "orange");
-    marker.appendChild(polygon);
-    defs.appendChild(marker);
-    svg.appendChild(defs);
+    const c1 = getCoords(from);
+    const c2 = getCoords(to);
 
     const line = document.createElementNS(svgNs, "line");
-    line.setAttribute("x1", x1);
-    line.setAttribute("y1", y1);
-    line.setAttribute("x2", x2);
-    line.setAttribute("y2", y2);
+    line.setAttribute("x1", c1.x);
+    line.setAttribute("y1", c1.y);
+    line.setAttribute("x2", c2.x);
+    line.setAttribute("y2", c2.y);
     line.setAttribute("stroke", "orange");
-    line.setAttribute("stroke-width", squareSize * 0.12);
+    line.setAttribute("stroke-width", "0.15");
     line.setAttribute("stroke-opacity", "0.8");
     line.setAttribute("marker-end", "url(#arrowhead)");
 
     svg.appendChild(line);
-    document.body.appendChild(svg);
 }
 
 function simulateMove(from, to, isFlipped, rect, squareSize) {
@@ -473,6 +598,7 @@ function simulateMove(from, to, isFlipped, rect, squareSize) {
         if (!f || !r) return { x: NaN, y: NaN };
 
         let left, top;
+        // Target center
         if (!isFlipped) {
             left = (f - 1) * squareSize + (squareSize / 2);
             top = (8 - r) * squareSize + (squareSize / 2);
@@ -491,53 +617,78 @@ function simulateMove(from, to, isFlipped, rect, squareSize) {
 
     if (!Number.isFinite(fromCoords.x) || !Number.isFinite(fromCoords.y) ||
         !Number.isFinite(toCoords.x) || !Number.isFinite(toCoords.y)) {
-        console.warn(`Solver: Invalid Coords for ${from}->${to}`, fromCoords, toCoords);
         return;
     }
 
-    const click = (x, y, label) => {
-        // Retry logic: try center, then 5px offset
-        const tryClick = (cx, cy) => {
-            const elements = document.elementsFromPoint(cx - window.scrollX, cy - window.scrollY);
-            const target = elements.find(el => {
-                const cls = (el.className && typeof el.className === 'string') ? el.className : "";
-                return !cls.includes('solver-highlight') &&
-                    !cls.includes('solver-arrow') &&
-                    !cls.includes('coordinates') &&
-                    !cls.includes('hover-square') &&
-                    !cls.includes('highlight');
-            }) || elements[0];
-
-            if (target) {
-                console.log(`Solver: Clicked ${label} at ${cx}, ${cy} on`, target);
-                const opts = {
-                    bubbles: true, cancelable: true, view: window,
-                    clientX: cx - window.scrollX, clientY: cy - window.scrollY,
-                    buttons: 1, pointerId: 1, width: 1, height: 1, pressure: 0.5, isPrimary: true
-                };
-                target.dispatchEvent(new PointerEvent('pointerdown', opts));
-                target.dispatchEvent(new MouseEvent('mousedown', opts));
-                target.dispatchEvent(new PointerEvent('pointerup', opts));
-                target.dispatchEvent(new MouseEvent('mouseup', opts));
-                target.dispatchEvent(new MouseEvent('click', opts));
-                return true;
-            }
-            return false;
+    // ULTRA ROBUST HYBRID EVENT DISPATCHER
+    const dispatchAll = (el, type, x, y, buttons = 1) => {
+        const opts = {
+            bubbles: true, cancelable: true, view: window,
+            clientX: x - window.scrollX, clientY: y - window.scrollY,
+            screenX: x, screenY: y,
+            buttons: buttons, pointerId: 1, isPrimary: true
         };
-
-        if (!tryClick(x, y)) {
-            console.warn(`Solver: Retry click ${label} with offset...`);
-            if (!tryClick(x, y + 5)) {
-                console.error(`Solver: Failed to find element at ${x}, ${y}`);
-            }
-        }
+        // 1. Pointer Events
+        try { el.dispatchEvent(new PointerEvent('pointer' + type, opts)); } catch (e) { }
+        // 2. Mouse Events
+        if (type === 'down') el.dispatchEvent(new MouseEvent('mousedown', opts));
+        if (type === 'move') el.dispatchEvent(new MouseEvent('mousemove', opts));
+        if (type === 'up') el.dispatchEvent(new MouseEvent('mouseup', opts));
+        if (type === 'over') el.dispatchEvent(new MouseEvent('mouseover', opts));
+        if (type === 'enter') el.dispatchEvent(new MouseEvent('mouseenter', opts));
     };
 
-    console.log(`Solver: Auto Move ${from} -> ${to}`);
-    click(fromCoords.x, fromCoords.y, from);
+    const startX = fromCoords.x - window.scrollX;
+    const startY = fromCoords.y - window.scrollY;
+
+    // Robust Source Finding
+    const els = document.elementsFromPoint(startX, startY);
+    const sourceEl = els.find(e => {
+        const c = String(e.className || "");
+        return !c.includes('solver') && (c.includes('piece') || c.includes('drag') || c.includes('square'));
+    }) || els[0];
+
+    if (!sourceEl) { console.warn("Solver: Source not found for auto-move"); return; }
+
+    console.log("Solver: Dragging element", sourceEl);
+
+    // ACTION SEQUENCE
+    // 1. Hover & Enter
+    dispatchAll(sourceEl, 'over', startX, startY, 0);
+    dispatchAll(sourceEl, 'enter', startX, startY, 0);
+
+    // 2. Grab (Down)
+    dispatchAll(sourceEl, 'down', startX, startY, 1);
+
+    const dragDuration = 250 + Math.random() * 200;
+
+    // 3. Drag Step (Move slightly) - Critical for detection
     setTimeout(() => {
-        click(toCoords.x, toCoords.y, to);
-    }, 250);
+        const midX = (fromCoords.x + toCoords.x) / 2 - window.scrollX;
+        const midY = (fromCoords.y + toCoords.y) / 2 - window.scrollY;
+        dispatchAll(sourceEl, 'move', midX, midY, 1);
+    }, dragDuration / 2);
+
+    // 4. Drop (At Destination)
+    setTimeout(() => {
+        const endX = toCoords.x - window.scrollX;
+        const endY = toCoords.y - window.scrollY;
+
+        const destEls = document.elementsFromPoint(endX, endY);
+        const destEl = destEls.find(e => {
+            const c = String(e.className || "");
+            return !c.includes('solver') && !c.includes('highlight') && (c.includes('piece') || c.includes('square'));
+        }) || destEls[0] || sourceEl;
+
+        dispatchAll(destEl, 'move', endX, endY, 1);
+        dispatchAll(destEl, 'up', endX, endY, 0);
+
+        // 5. Finalize with Click (Fallback)
+        destEl.dispatchEvent(new MouseEvent('click', {
+            bubbles: true, cancelable: true, view: window,
+            clientX: endX, clientY: endY, buttons: 0
+        }));
+    }, dragDuration);
 }
 
 function removeHighlights() {
@@ -545,4 +696,39 @@ function removeHighlights() {
     existing.forEach(el => el.remove());
     const existingArrows = document.querySelectorAll('.solver-arrow');
     existingArrows.forEach(el => el.remove());
+}
+
+function addResetButton() {
+    if (document.getElementById('solver-reset-btn')) return;
+    const btn = document.createElement('button');
+    btn.id = 'solver-reset-btn';
+    btn.innerText = '↺ Reset';
+    btn.style.position = 'fixed';
+    btn.style.top = '60px';
+    btn.style.right = '20px';
+    btn.style.zIndex = '999999';
+    btn.style.padding = '8px 12px';
+    btn.style.backgroundColor = '#2ecc71';
+    btn.style.color = 'white';
+    btn.style.border = 'none';
+    btn.style.borderRadius = '5px';
+    btn.style.cursor = 'pointer';
+    btn.style.fontFamily = 'Arial, sans-serif';
+    btn.style.fontWeight = 'bold';
+    btn.style.boxShadow = '0 2px 5px rgba(0,0,0,0.3)';
+
+    btn.onclick = () => {
+        console.log("Solver: Manual Reset Triggered");
+        lastFen = "";
+        analyzeBoard();
+        btn.innerText = 'Checking...';
+        setTimeout(() => btn.innerText = '↺ Reset', 1000);
+    };
+
+    document.body.appendChild(btn);
+}
+
+function removeResetButton() {
+    const btn = document.getElementById('solver-reset-btn');
+    if (btn) btn.remove();
 }

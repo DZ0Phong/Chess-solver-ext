@@ -15,27 +15,54 @@ function initEngine() {
         engineWorker = new Worker(scriptPath);
 
         engineWorker.onmessage = (e) => {
-            const line = e.data;
-            if (line === 'uciok') {
-                console.log("Stockfish (Offscreen) Ready");
+            const msg = e.data;
+            if (typeof msg !== 'string') return;
+
+            // 1. Parse MultiPV info lines
+            // "info depth 10 ... multipv 2 ... pv e2e4"
+            // 1. Parse MultiPV info lines
+            // Example: "info ... multipv 1 ... pv e2e4 e7e5"
+            if (msg.startsWith('info') && msg.includes('multipv') && msg.includes(' pv ')) {
+                const mpvMatch = msg.match(/multipv (\d+)/);
+                // Strict regex for UCI move (e2e4 or a7a8q)
+                const pvMatch = msg.match(/ pv ([a-h][1-8][a-h][1-8][qrbn]?)/);
+                if (mpvMatch && pvMatch) {
+                    const rank = parseInt(mpvMatch[1]);
+                    // Only track reasonable top moves (1-3)
+                    if (rank >= 1 && rank <= 3) {
+                        topMovesCache[rank] = pvMatch[1];
+                    }
+                }
             }
 
-            // Forward bestmove to background script
-            if (typeof line === 'string' && line.startsWith('bestmove')) {
-                const move = line.split(' ')[1];
+            // 2. Handle Best Move
+            if (msg.startsWith('bestmove')) {
+                const bestMove = msg.split(' ')[1];
+
+                // Collect top moves values (1, 2, 3)
+                const attempts = [topMovesCache[1], topMovesCache[2], topMovesCache[3]].filter(m => m);
+                // Ensure bestMove is included/primary
+                // Usually topMovesCache[1] == bestMove.
+
                 chrome.runtime.sendMessage({
-                    type: "ENGINE_RESPONSE",
-                    bestMove: move
+                    type: 'ENGINE_RESPONSE',
+                    bestMove: bestMove,
+                    topMoves: attempts
                 });
             }
         };
 
         engineWorker.postMessage('uci');
-        // Boost Engine Strength
-        engineWorker.postMessage('setoption name Skill Level value 20');
+        // Config: Human-like Sparring Mode.
+        // Skill Level 10 (approx 1700 ELO).
+        engineWorker.postMessage('setoption name Skill Level value 10');
+
+        // **Feature: MultiPV 3 (Analyze top 3 moves)**
+        engineWorker.postMessage('setoption name MultiPV value 3');
+
         engineWorker.postMessage('setoption name Threads value 2');
         engineWorker.postMessage('setoption name Hash value 64');
-        engineWorker.postMessage('setoption name Contempt value 0'); // Play objectively
+        engineWorker.postMessage('setoption name Contempt value 0');
 
     } catch (e) {
         console.error("Offscreen Worker Error:", e);
@@ -48,7 +75,8 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     } else if (request.type === 'ANALYZE_OFFSCREEN') {
         if (!engineWorker) initEngine();
 
-        // Stop previous
+        // Reset cache for new position
+        topMovesCache = {};
         engineWorker.postMessage('stop');
 
         // Search

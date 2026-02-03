@@ -95,7 +95,11 @@ document.addEventListener('DOMContentLoaded', () => {
     function notifyContentScript(message) {
         chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
             if (tabs[0]?.id) {
-                chrome.tabs.sendMessage(tabs[0].id, message);
+                chrome.tabs.sendMessage(tabs[0].id, message, (response) => {
+                    if (chrome.runtime.lastError) {
+                        console.log("Solver: Message failed (Content Script not ready?)", chrome.runtime.lastError.message);
+                    }
+                });
             }
         });
     }
