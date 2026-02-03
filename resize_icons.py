@@ -22,3 +22,4 @@ def resize_icon():
 
 if __name__ == "__main__":
     resize_icon()
+# 1 giac mo khong thanh

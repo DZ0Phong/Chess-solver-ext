@@ -1,0 +1,1 @@
+1 giac mo khong thanh
