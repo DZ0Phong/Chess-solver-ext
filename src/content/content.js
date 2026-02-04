@@ -547,26 +547,45 @@ function getPlayerColor() {
     if (orientation) return orientation.startsWith('b') ? 'b' : 'w';
     if (boardElement.classList.contains('flipped')) return 'b';
 
-    // 2. Geometric Detection (Fallback if attributes fail)
-    // Find square A1 (class 'square-11'). We also check for coordinate labels.
-    const a1 = boardElement.querySelector('.square-11') ||
-        boardElement.querySelector('[data-coords="a1"]') ||
-        Array.from(boardElement.querySelectorAll('.coordinate-light, .coordinate-dark')).find(el => el.innerText === '1')?.parentElement;
+    // 2. Robust Geometric Detection (Vote System)
+    // Scan ALL pieces to determine orientation based on their positions
+    // This works even if A1 is empty (user reported bug when A1 rook missing)
 
-    if (a1) {
-        const boardRect = boardElement.getBoundingClientRect();
-        const a1Rect = a1.getBoundingClientRect();
+    let whiteVotes = 0;
+    let blackVotes = 0;
+    const boardRect = boardElement.getBoundingClientRect();
+    const pieces = boardElement.querySelectorAll('.piece'); // Or elements with square-xy
 
-        // A1 is Bottom-Left for White, Top-Right for Black
-        const relativeTop = a1Rect.top - boardRect.top;
-        if (relativeTop < boardRect.height / 2) {
-            return 'b'; // A1 is in top half -> Black
-        } else {
-            return 'w'; // A1 is in bottom half -> White
+    pieces.forEach(p => {
+        const cls = p.className || "";
+        const match = cls.match(/square-(\d)(\d)/);
+        if (match) {
+            const f = parseInt(match[1]); // 1-8 (a-h)
+            const r = parseInt(match[2]); // 1-8 (rank)
+
+            const rect = p.getBoundingClientRect();
+            // Calculate relative Y position (0.0 to 1.0)
+            // 0.0 = Top, 1.0 = Bottom
+            const relativeY = (rect.top - boardRect.top) / boardRect.height;
+
+            // Expected relative Y for this rank:
+            // If White: Rank 8 is Top (0.0), Rank 1 is Bottom (0.875) -> Formula: (8-r)/8
+            // If Black: Rank 1 is Top (0.0), Rank 8 is Bottom (0.875) -> Formula: (r-1)/8
+
+            const expectedIfWhite = (8 - r) / 8;
+            const expectedIfBlack = (r - 1) / 8;
+
+            // Compare error
+            const errWhite = Math.abs(relativeY - expectedIfWhite);
+            const errBlack = Math.abs(relativeY - expectedIfBlack);
+
+            if (errBlack < errWhite) blackVotes++;
+            else whiteVotes++;
         }
-    }
+    });
 
-    return 'w'; // Default to White
+    if (blackVotes > whiteVotes) return 'b';
+    return 'w';
 }
 
 function isWhitePiece(p) { return 'PNBRQK'.includes(p); }
