@@ -813,22 +813,26 @@ function highlightMove(move, altMoves = []) {
 
         const from = move.substring(0, 2);
         const to = move.substring(2, 4);
-        console.log(`Solver: Auto-moving ${from}->${to} (${speedMode})`);
+        const promotionChar = move.length > 4 ? move[4] : null; // 'q', 'r', 'b', 'n'
+
+        console.log(`Solver: Auto-moving ${from}->${to}${promotionChar ? '=' + promotionChar : ''} (${speedMode})`);
 
         // GM Mode: Minimal delay + FAST DRAG (click-click unreliable)
         if (speedMode === 'gm') {
             const gmDelay = 50 + Math.random() * 150; // 50-200ms only
             setTimeout(() => {
                 if (isGameOver()) return;
-                // Pass 'true' as final arg for IS_FAST_MODE
-                simulateMove(from, to, isFlipped, null, null, true);
+                // Pass 'true' as final arg for IS_FAST_MODE, then promotionChar
+                simulateMove(from, to, isFlipped, null, null, true, promotionChar);
+                checkCModeUpdate();
             }, gmDelay);
         } else {
             // Normal drag mode for Master/Analysis
             const randomDelay = minDelay + Math.random() * (maxDelay - minDelay);
             setTimeout(() => {
                 if (isGameOver()) return;
-                simulateMove(from, to, isFlipped, null, null);
+                simulateMove(from, to, isFlipped, null, null, false, promotionChar);
+                checkCModeUpdate();
             }, randomDelay);
         }
     }
@@ -994,7 +998,7 @@ function simulateFastClick(from, to, isFlipped) {
     }, 30);
 }
 
-function simulateMove(from, to, isFlipped, ignoredRect, ignoredSquareSize, isFastMode = false) {
+function simulateMove(from, to, isFlipped, ignoredRect, ignoredSquareSize, isFastMode = false, promotionChar = null) {
     // REFRESH COORDINATES: Rect passed from outside is likely stale due to debounce/timeouts
     if (!boardElement) return;
     const rect = boardElement.getBoundingClientRect();
@@ -1255,6 +1259,25 @@ function simulateMove(from, to, isFlipped, ignoredRect, ignoredSquareSize, isFas
                     }));
                 }, 50);
             }
+
+            // 6. Handle Promotion
+            if (promotionChar) {
+                setTimeout(() => {
+                    // Find promotion piece (e.g., class "promotion-piece wq")
+                    const promoOne = document.querySelector(`.promotion-piece.${promotionChar}`) ||
+                        document.querySelector(`.promotion-piece.${playerColor}${promotionChar}`) ||
+                        Array.from(document.querySelectorAll('.promotion-piece')).find(el => (el.className || "").includes(promotionChar));
+
+                    if (promoOne) {
+                        console.log(`Solver: Auto-promoting to ${promotionChar}`);
+                        promoOne.click();
+                        // Fallback dispatch if simple click fails
+                        promoOne.dispatchEvent(new MouseEvent('click', { bubbles: true, view: window }));
+                    } else {
+                        console.warn("Solver: Promotion window not found!");
+                    }
+                }, 250); // Give UI time to render modal
+            }
         }, 20);
     }, dragDuration);
 }
@@ -1313,3 +1336,82 @@ function removeResetButton() {
     const btn = document.getElementById('solver-reset-btn');
     if (btn) btn.remove();
 }
+
+// --- C-Mode (Combine Mode) ---
+let cModeEnabled = true; // Default ON requested by user
+let cModeMovesLeft = 0;
+
+function toggleCMode() {
+    cModeEnabled = !cModeEnabled;
+    const btn = document.getElementById('solver-cmode-btn');
+
+    if (cModeEnabled) {
+        console.log("Solver: C-Mode Enabled");
+        if (btn) {
+            btn.innerText = 'C-Mode: ON';
+            btn.style.backgroundColor = '#2ecc71'; // Green
+        }
+        // Reset counter to trigger switch/init immediately or next move
+        cModeMovesLeft = 0;
+    } else {
+        console.log("Solver: C-Mode Disabled");
+        if (btn) {
+            btn.innerText = 'C-Mode: OFF';
+            btn.style.backgroundColor = '#e74c3c'; // Red
+        }
+    }
+}
+
+// Function called AFTER every auto-move
+function checkCModeUpdate() {
+    if (!cModeEnabled) return;
+
+    cModeMovesLeft--;
+
+    if (cModeMovesLeft <= 0) {
+        // Switch Mode
+        const modes = ['gm', 'master', 'analysis'];
+        const randomMode = modes[Math.floor(Math.random() * modes.length)];
+
+        speedMode = randomMode;
+        console.log(`Solver: C-Mode switched to ${speedMode}`);
+
+        // Sync with storage
+        chrome.storage.local.set({ speedMode: randomMode });
+
+        // Reset counter (Random 1-3 moves)
+        cModeMovesLeft = 1 + Math.floor(Math.random() * 2); // 1, 2, or 3
+        console.log(`Solver: C-Mode next switch in ${cModeMovesLeft} moves`);
+    }
+}
+
+function addCModeButton() {
+    if (document.getElementById('solver-cmode-btn')) return;
+    const btn = document.createElement('button');
+    btn.id = 'solver-cmode-btn';
+    btn.innerText = 'C-Mode: ON'; // Default ON
+    btn.style.position = 'fixed';
+    btn.style.top = '110px';
+    btn.style.right = '20px';
+    btn.style.zIndex = '999999';
+    btn.style.padding = '8px 12px';
+    btn.style.backgroundColor = '#2ecc71'; // Green (Default ON)
+    btn.style.color = 'white';
+    btn.style.border = 'none';
+    btn.style.borderRadius = '5px';
+    btn.style.cursor = 'pointer';
+    btn.style.fontFamily = 'Arial, sans-serif';
+    btn.style.fontWeight = 'bold';
+    btn.style.boxShadow = '0 2px 5px rgba(0,0,0,0.3)';
+
+    btn.onclick = toggleCMode;
+    document.body.appendChild(btn);
+}
+
+function removeCModeButton() {
+    const btn = document.getElementById('solver-cmode-btn');
+    if (btn) btn.remove();
+}
+
+// Call on init
+addCModeButton();

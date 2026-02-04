@@ -13,9 +13,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Default delay presets for each mode (in ms)
     const DELAY_PRESETS = {
-        gm: { min: 300, max: 800 },       // Bullet 1min
-        master: { min: 800, max: 2000 },  // Rapid 3-5min (default)
-        analysis: { min: 500, max: 1200 } // Quick hints
+        gm: { min: 300, max: 800 },       // Bullet 1min (UI display only, actual is faster)
+        master: { min: 1000, max: 2500 },  // Rapid 3-5min (default)
+        analysis: { min: 3500, max: 5000 } // Deep Analysis (User requested slow down)
     };
 
     // Load saved state
