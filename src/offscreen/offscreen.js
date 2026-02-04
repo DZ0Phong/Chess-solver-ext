@@ -2,6 +2,8 @@
 console.log("Offscreen Document Loaded");
 
 let engineWorker = null;
+let currentSkillLevel = 20; // Default to MAX
+let topMovesCache = {};
 
 function initEngine() {
     if (engineWorker) return;
@@ -20,7 +22,6 @@ function initEngine() {
 
             // 1. Parse MultiPV info lines
             // "info depth 10 ... multipv 2 ... pv e2e4"
-            // 1. Parse MultiPV info lines
             // Example: "info ... multipv 1 ... pv e2e4 e7e5"
             if (msg.startsWith('info') && msg.includes('multipv') && msg.includes(' pv ')) {
                 const mpvMatch = msg.match(/multipv (\d+)/);
@@ -41,8 +42,6 @@ function initEngine() {
 
                 // Collect top moves values (1, 2, 3)
                 const attempts = [topMovesCache[1], topMovesCache[2], topMovesCache[3]].filter(m => m);
-                // Ensure bestMove is included/primary
-                // Usually topMovesCache[1] == bestMove.
 
                 chrome.runtime.sendMessage({
                     type: 'ENGINE_RESPONSE',
@@ -53,9 +52,8 @@ function initEngine() {
         };
 
         engineWorker.postMessage('uci');
-        // Config: Human-like Sparring Mode.
-        // Skill Level 10 (approx 1700 ELO).
-        engineWorker.postMessage('setoption name Skill Level value 10');
+        // Config: Start with MAX skill
+        engineWorker.postMessage('setoption name Skill Level value 20');
 
         // **Feature: MultiPV 3 (Analyze top 3 moves)**
         engineWorker.postMessage('setoption name MultiPV value 3');
@@ -79,13 +77,34 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         topMovesCache = {};
         engineWorker.postMessage('stop');
 
+        // Dynamic settings based on speedMode
+        const mode = request.speedMode || 'master';
+        let moveTime = 1000; // Default 1s
+        let skillLevel = 20; // Default MAX
+
+        if (mode === 'gm') {
+            // GM: Fastest + Smartest
+            moveTime = 500;  // 0.5s think time
+            skillLevel = 20; // MAX skill (3000+ ELO)
+        } else if (mode === 'master') {
+            // Master: Balanced
+            moveTime = 1000; // 1s think time
+            skillLevel = 15; // ~2000 ELO
+        } else if (mode === 'analysis') {
+            // Analysis: Deepest thinking
+            moveTime = 2000; // 2s think time
+            skillLevel = 20; // MAX skill
+        }
+
+        // Only update skill level if changed (avoid spam)
+        if (skillLevel !== currentSkillLevel) {
+            engineWorker.postMessage(`setoption name Skill Level value ${skillLevel}`);
+            currentSkillLevel = skillLevel;
+        }
+
         // Search
-        // User requested "Accuracy". 500ms was too fast (weak).
-        // Depth 18 is approximately 2000-2400 ELO range often.
-        // But User said Depth 18 is "too slow" for Blitz (3 min).
-        // Let's use 1000ms (1s) which is a good balance.
         engineWorker.postMessage(`position fen ${request.fen}`);
-        engineWorker.postMessage('go movetime 1000');
+        engineWorker.postMessage(`go movetime ${moveTime}`);
     }
 });
 

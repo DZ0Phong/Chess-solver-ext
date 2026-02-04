@@ -1,4 +1,4 @@
-console.log("Chess Solver Extension Loaded");
+
 
 // --- Configuration & State ---
 let isEnabled = false;
@@ -16,10 +16,11 @@ let lastGrid = null; // Track previous board state
 // Delay Settings
 let minDelay = 800;
 let maxDelay = 2000;
+let speedMode = 'master'; // 'gm', 'master', 'analysis'
 
 // --- Initialization ---
 
-chrome.storage.local.get(['solverEnabled', 'autoMoveEnabled', 'hideVisuals', 'minDelay', 'maxDelay'], (result) => {
+chrome.storage.local.get(['solverEnabled', 'autoMoveEnabled', 'hideVisuals', 'minDelay', 'maxDelay', 'speedMode'], (result) => {
     if (result.solverEnabled) {
         enableSolver();
     }
@@ -32,6 +33,7 @@ chrome.storage.local.get(['solverEnabled', 'autoMoveEnabled', 'hideVisuals', 'mi
     // Load delay settings
     if (result.minDelay) minDelay = result.minDelay;
     if (result.maxDelay) maxDelay = result.maxDelay;
+    if (result.speedMode) speedMode = result.speedMode;
 });
 
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
@@ -56,7 +58,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     if (request.type === "UPDATE_DELAY_SETTINGS") {
         minDelay = request.minDelay || 800;
         maxDelay = request.maxDelay || 2000;
-
+        if (request.speedMode) speedMode = request.speedMode;
     }
 });
 
@@ -65,7 +67,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 function enableSolver() {
     if (isEnabled) return;
     isEnabled = true;
-    console.log("Solver: Enabled");
+
     addResetButton();
     startBoardObserver();
     startMoveListObserver(); // Start watching moves specifically
@@ -75,7 +77,7 @@ function enableSolver() {
 
 function disableSolver() {
     isEnabled = false;
-    console.log("Solver: Disabled");
+
     removeResetButton();
     if (observer) {
         observer.disconnect();
@@ -109,7 +111,7 @@ function startBoardObserver() {
         boardElement = possibleBoards.find(b => b !== null);
 
         if (boardElement) {
-            console.log("Solver: ✅ Board detected!", boardElement.tagName, boardElement.className);
+            console.log("Solver: ✅ Board Found");
 
             // Clear any old observer
             if (observer) observer.disconnect();
@@ -134,18 +136,18 @@ function startBoardObserver() {
             const waitForModalClose = () => {
                 modalCheckAttempts++;
                 if (!isGameOver()) {
-                    console.log("Solver: Modal closed, starting analysis");
+                    console.log("Solver: Ready");
                     analyzeBoard();
                 } else if (modalCheckAttempts < 10) {
                     // Keep trying every 500ms for up to 5 seconds
                     setTimeout(waitForModalClose, 500);
                 } else {
-                    console.log("Solver: Modal still visible, analysis will start on first move");
+
                 }
             };
             setTimeout(waitForModalClose, 500);
         } else if (retryCount < maxRetries) {
-            console.log(`Solver: ❌ Board not found, retrying in ${retryCount * 500}ms...`);
+
             setTimeout(findBoard, retryCount * 500); // Exponential backoff
         } else {
             console.error("Solver: ❌ Board not found after max retries! Try refreshing.");
@@ -230,7 +232,7 @@ let lastUrl = location.href;
 let newGameObserver = null;
 
 function forceRestart() {
-    console.log("Solver: 🔄 Force Restart Triggered!");
+    console.log("Solver: 🔄 Restarting...");
 
     // Clear ALL state
     boardElement = null;
@@ -257,7 +259,7 @@ function forceRestart() {
         startBoardObserver();
         startMoveListObserver();
         startPoller();
-        console.log("Solver: ✅ Restart Complete!");
+        console.log("Solver: ✅ Active");
     }, 1000); // Increased to 1s for more reliable detection
 }
 
@@ -265,7 +267,7 @@ function startNewGameDetector() {
     // 1. URL Change Detection (setInterval fallback)
     setInterval(() => {
         if (location.href !== lastUrl) {
-            console.log("Solver: URL changed - New game detected!");
+            console.log("Solver: URL changed");
             lastUrl = location.href;
             forceRestart();
         }
@@ -277,18 +279,18 @@ function startNewGameDetector() {
 
     history.pushState = function (...args) {
         originalPushState.apply(this, args);
-        console.log("Solver: pushState detected - New game!");
+        console.log("Solver: New Game detected");
         setTimeout(forceRestart, 500);
     };
 
     history.replaceState = function (...args) {
         originalReplaceState.apply(this, args);
-        console.log("Solver: replaceState detected - New game!");
+        console.log("Solver: New Game detected");
         setTimeout(forceRestart, 500);
     };
 
     window.addEventListener('popstate', () => {
-        console.log("Solver: popstate detected - Navigation!");
+        console.log("Solver: Navigating...");
         setTimeout(forceRestart, 500);
     });
 
@@ -296,7 +298,7 @@ function startNewGameDetector() {
     newGameObserver = new MutationObserver(() => {
         // Check if board element got disconnected (replaced with new one)
         if (boardElement && !boardElement.isConnected) {
-            console.log("Solver: Board disconnected - Looking for new board...");
+            console.log("Solver: Re-syncing board...");
             forceRestart();
         }
     });
@@ -362,20 +364,17 @@ function analyzeBoard() {
     try {
         if (!chrome.runtime || !chrome.runtime.id) {
             extensionContextBroken = true;
-            console.error("Solver: Extension context invalidated! Please refresh the page.");
             showRefreshWarning();
             return;
         }
     } catch (e) {
         extensionContextBroken = true;
-        console.error("Solver: Extension context invalidated! Please refresh the page.");
         showRefreshWarning();
         return;
     }
 
     // 0b. Validity Check (Zombie Board Fix)
     if (!boardElement || !boardElement.isConnected) {
-        console.warn("Solver: Board disconnected/stale. Re-initializing...");
         boardElement = null;
         if (observer) observer.disconnect();
         startBoardObserver(); // Force re-detection
@@ -444,6 +443,11 @@ function analyzeBoard() {
                     return;
                 }
                 if (response && response.bestMove) {
+                    if (response.bestMove === '(none)') {
+                        console.log("Solver: Engine detected Game Over (none)");
+                        return;
+                    }
+
                     // VALIDATE MOVE: Check source square has a piece
                     const from = response.bestMove.substring(0, 2);
                     const fromFile = from.charCodeAt(0) - 97; // a=0, h=7
@@ -538,37 +542,31 @@ function detectTurnFromDOM() {
 function getPlayerColor() {
     if (!boardElement) return 'w';
 
-    // GEOMETRIC DETECTION (Most Robust)
-    // Find square A1 (class 'square-11')
-    const a1 = boardElement.querySelector('.square-11');
+    // 1. High Priority: Attributes (Very reliable on Chess.com)
+    const orientation = boardElement.getAttribute('orientation');
+    if (orientation) return orientation.startsWith('b') ? 'b' : 'w';
+    if (boardElement.classList.contains('flipped')) return 'b';
+
+    // 2. Geometric Detection (Fallback if attributes fail)
+    // Find square A1 (class 'square-11'). We also check for coordinate labels.
+    const a1 = boardElement.querySelector('.square-11') ||
+        boardElement.querySelector('[data-coords="a1"]') ||
+        Array.from(boardElement.querySelectorAll('.coordinate-light, .coordinate-dark')).find(el => el.innerText === '1')?.parentElement;
+
     if (a1) {
         const boardRect = boardElement.getBoundingClientRect();
         const a1Rect = a1.getBoundingClientRect();
 
-        // If A1 is in the Top-Half of the board -> Black (Flipped)
+        // A1 is Bottom-Left for White, Top-Right for Black
         const relativeTop = a1Rect.top - boardRect.top;
-        const relativePercent = (relativeTop / boardRect.height) * 100;
-
-
-
-        // A1 is Top-Right for Black, Bottom-Left for White
-        // So if relativeTop is small (< 50% height), it's Black.
         if (relativeTop < boardRect.height / 2) {
-
-            return 'b'; // Black
+            return 'b'; // A1 is in top half -> Black
         } else {
-
-            return 'w'; // White
+            return 'w'; // A1 is in bottom half -> White
         }
     }
 
-
-
-    // Fallback: Attributes
-    const orientation = boardElement.getAttribute('orientation');
-    if (orientation) return orientation.startsWith('b') ? 'b' : 'w';
-    if (boardElement.classList.contains('flipped')) return 'b';
-    return 'w';
+    return 'w'; // Default to White
 }
 
 function isWhitePiece(p) { return 'PNBRQK'.includes(p); }
@@ -771,7 +769,7 @@ function highlightMove(move, altMoves = []) {
             // Draw Best Move (Green Arrow)
             const from = move.substring(0, 2);
             const to = move.substring(2, 4);
-            console.log(`Solver: Drawing arrow ${from}->${to}, isFlipped=${isFlipped}, playerColor=${playerColor}`);
+            console.log(`Solver: Move ${from}->${to} (${playerColor === 'w' ? 'White' : 'Black'})`);
             drawArrow(container, from, to, isFlipped, '#00e600'); // Matrix Green
 
             // Draw Alt Moves (Yellow Arrows)
@@ -794,21 +792,26 @@ function highlightMove(move, altMoves = []) {
         const rect = boardElement.getBoundingClientRect();
         const squareSize = rect.width / 8;
 
-
         const from = move.substring(0, 2);
         const to = move.substring(2, 4);
+        console.log(`Solver: Auto-moving ${from}->${to} (${speedMode})`);
 
-        // Random delay using user settings
-        const randomDelay = minDelay + Math.random() * (maxDelay - minDelay);
-
-        setTimeout(() => {
-            // Check if game ended during delay
-            if (isGameOver()) {
-                console.log("Solver: Auto-move cancelled - Game Over");
-                return;
-            }
-            simulateMove(from, to, isFlipped, null, null);
-        }, randomDelay);
+        // GM Mode: Minimal delay + FAST DRAG (click-click unreliable)
+        if (speedMode === 'gm') {
+            const gmDelay = 50 + Math.random() * 150; // 50-200ms only
+            setTimeout(() => {
+                if (isGameOver()) return;
+                // Pass 'true' as final arg for IS_FAST_MODE
+                simulateMove(from, to, isFlipped, null, null, true);
+            }, gmDelay);
+        } else {
+            // Normal drag mode for Master/Analysis
+            const randomDelay = minDelay + Math.random() * (maxDelay - minDelay);
+            setTimeout(() => {
+                if (isGameOver()) return;
+                simulateMove(from, to, isFlipped, null, null);
+            }, randomDelay);
+        }
     }
 }
 
@@ -860,7 +863,7 @@ function drawArrow(container, from, to, isFlipped, color = '#00e600') {
         const f = fileMap[sq[0]];
         const r = parseInt(sq[1]);
         if (!f || !r || isNaN(f) || isNaN(r)) {
-            console.warn("Solver: drawArrow Invalid Coords", sq, f, r);
+
             return { x: 0, y: 0 };
         }
         if (!isFlipped) {
@@ -889,11 +892,96 @@ function drawArrow(container, from, to, isFlipped, color = '#00e600') {
     svg.appendChild(line);
 }
 
-function simulateMove(from, to, isFlipped, ignoredRect, ignoredSquareSize) {
+// FAST CLICK MODE for GM (click source -> click target, no drag)
+function simulateFastClick(from, to, isFlipped) {
+    if (!boardElement) return;
+
+    const getSquareCoords = (sq) => {
+        const fileMap = { a: 1, b: 2, c: 3, d: 4, e: 5, f: 6, g: 7, h: 8 };
+        const f = fileMap[sq[0]];
+        const r = parseInt(sq[1]);
+        if (!f || !r) return null;
+
+        const rect = boardElement.getBoundingClientRect();
+        const sqSize = rect.width / 8;
+
+        let left, top;
+        if (!isFlipped) {
+            left = (f - 1) * sqSize + sqSize * 0.5;
+            top = (8 - r) * sqSize + sqSize * 0.5;
+        } else {
+            left = (8 - f) * sqSize + sqSize * 0.5;
+            top = (r - 1) * sqSize + sqSize * 0.5;
+        }
+        return { x: rect.left + left, y: rect.top + top };
+    };
+
+    // RECALCULATE source coords right now (to handle viewport changes)
+    const freshFromCoords = getSquareCoords(from);
+    if (!freshFromCoords) return;
+
+    // Find source element (DOM lookup needs to happen now too if we want to be safe, but let's trust piece hasn't moved yet)
+    // Actually, finding the element again is safer if board re-rendered, but usually the element ref is stable enough for milliseconds.
+    // However, coordinate IS critical.
+
+    const fileMap = { a: 1, b: 2, c: 3, d: 4, e: 5, f: 6, g: 7, h: 8 };
+    const f = fileMap[from[0]];
+    const r = parseInt(from[1]);
+    const sourceEl = boardElement.querySelector(`.piece.square-${f}${r}`) ||
+        boardElement.querySelector(`.square-${f}${r}`);
+
+    if (!sourceEl) return;
+
+    // Click source (select piece)
+    sourceEl.dispatchEvent(new MouseEvent('mousedown', {
+        bubbles: true, cancelable: true, view: window,
+        clientX: freshFromCoords.x, clientY: freshFromCoords.y, buttons: 1
+    }));
+    sourceEl.dispatchEvent(new MouseEvent('mouseup', {
+        bubbles: true, cancelable: true, view: window,
+        clientX: freshFromCoords.x, clientY: freshFromCoords.y, buttons: 0
+    }));
+    sourceEl.dispatchEvent(new MouseEvent('click', {
+        bubbles: true, cancelable: true, view: window,
+        clientX: freshFromCoords.x, clientY: freshFromCoords.y
+    }));
+
+    // Tiny delay then click destination
+    setTimeout(() => {
+        // RECALCULATE coords to handle viewport changes (e.g. console open)
+        const freshToCoords = getSquareCoords(to);
+        if (!freshToCoords) return;
+
+        const destEls = document.elementsFromPoint(freshToCoords.x, freshToCoords.y);
+        const destEl = destEls.find(e => {
+            const c = String(e.className || "");
+            return !c.includes('solver') && (c.includes('square') || c.includes('piece'));
+        }) || destEls[0];
+
+        if (destEl) {
+            destEl.dispatchEvent(new MouseEvent('mousedown', {
+                bubbles: true, cancelable: true, view: window,
+                clientX: freshToCoords.x, clientY: freshToCoords.y, buttons: 1
+            }));
+            destEl.dispatchEvent(new MouseEvent('mouseup', {
+                bubbles: true, cancelable: true, view: window,
+                clientX: freshToCoords.x, clientY: freshToCoords.y, buttons: 0
+            }));
+            destEl.dispatchEvent(new MouseEvent('click', {
+                bubbles: true, cancelable: true, view: window,
+                clientX: freshToCoords.x, clientY: freshToCoords.y
+            }));
+        }
+    }, 30);
+}
+
+function simulateMove(from, to, isFlipped, ignoredRect, ignoredSquareSize, isFastMode = false) {
     // REFRESH COORDINATES: Rect passed from outside is likely stale due to debounce/timeouts
     if (!boardElement) return;
     const rect = boardElement.getBoundingClientRect();
     const squareSize = rect.width / 8;
+
+
 
     // Center point adjustment (0.5 is center).
     // Use 0.25 (25%) to grab VERY HIGH on 3D pieces to prevent "slipping down"
@@ -994,11 +1082,33 @@ function simulateMove(from, to, isFlipped, ignoredRect, ignoredSquareSize) {
         return { el: e, dist: dist };
     }).sort((a, b) => a.dist - b.dist);
 
-    // PRIORITY 1: Find a PIECE (drag target)
+    // PRIORITY 1: Find a PIECE that matches the expected square (Best for 3D overlap)
+    const fileMap = { a: 1, b: 2, c: 3, d: 4, e: 5, f: 6, g: 7, h: 8 };
+    const f = fileMap[from[0]];
+    const r = parseInt(from[1]);
+    const expectedSquareClass = `square-${f}${r}`;
+
     let sourceEntry = sorted.find(entry => {
         const c = String(entry.el.className || "");
-        return !c.includes('solver') && !c.includes('highlight') && (c.includes('piece') || c.includes('drag'));
+        // Check for piece AND optionally checking if it belongs to the right square
+        // Note: Some sites might not put square class on piece, but Chess.com usually does.
+        const isPiece = !c.includes('solver') && !c.includes('highlight') && (c.includes('piece') || c.includes('drag'));
+        if (!isPiece) return false;
+
+        // If the piece has a square class, it MUST match. If no square class, accept it (riskier but needed).
+        if (c.includes('square-')) {
+            return c.includes(expectedSquareClass);
+        }
+        return true;
     });
+
+    // Fallback: If strict match failed, try any piece (old logic, but lower priority)
+    if (!sourceEntry) {
+        sourceEntry = sorted.find(entry => {
+            const c = String(entry.el.className || "");
+            return !c.includes('solver') && !c.includes('highlight') && (c.includes('piece') || c.includes('drag'));
+        });
+    }
 
     // PRIORITY 2: Find a SQUARE (fallback)
     if (!sourceEntry) {
@@ -1023,45 +1133,86 @@ function simulateMove(from, to, isFlipped, ignoredRect, ignoredSquareSize) {
     }
 
     if (!sourceEl) {
-        console.warn("Solver: Source not found for auto-move at", from);
+
         return;
     }
 
     // Debug Log for User Feedback
 
 
+    // Helper to get FRESH coordinates (recalculates each time to handle viewport changes)
+    const getFreshCoords = (sq) => {
+        const fileMap = { a: 1, b: 2, c: 3, d: 4, e: 5, f: 6, g: 7, h: 8 };
+        const f = fileMap[sq[0]];
+        const r = parseInt(sq[1]);
+        if (!f || !r) return { x: 0, y: 0 };
+
+        const freshRect = boardElement.getBoundingClientRect();
+        const sqSize = freshRect.width / 8;
+
+        let left, top;
+        // Check for Visual Bottom Row (Rank 1 for White, Rank 8 for Black)
+        // const isVisualBottomRow = isFlipped ? (r === 8) : (r === 1);
+
+        // GLOBAL FIX: Always grab HIGH (20% from top) to avoid hitting pieces in the row below
+        // This fixes the issue where clicking row 2 hits the head of pieces in row 1.
+        const yOffset = 0.2;
+
+        if (!isFlipped) {
+            left = (f - 1) * sqSize + sqSize * 0.5;
+            top = (8 - r) * sqSize + sqSize * yOffset;
+        } else {
+            left = (8 - f) * sqSize + sqSize * 0.5;
+            top = (r - 1) * sqSize + sqSize * yOffset;
+        }
+        return {
+            x: freshRect.left + left,
+            y: freshRect.top + top
+        };
+    };
+
     // ACTION SEQUENCE
     // 1. Hover & Enter
-    dispatchAll(sourceEl, 'over', startX, startY, 0);
-    dispatchAll(sourceEl, 'enter', startX, startY, 0);
+    const start = getFreshCoords(from);
+    dispatchAll(sourceEl, 'over', start.x, start.y, 0);
+    dispatchAll(sourceEl, 'enter', start.x, start.y, 0);
 
     // 2. Grab (Down)
-    dispatchAll(sourceEl, 'down', startX, startY, 1);
+    dispatchAll(sourceEl, 'down', start.x, start.y, 1);
 
     // Calculate drag distance
-    const dragDistancePixels = Math.hypot(toCoords.x - fromCoords.x, toCoords.y - fromCoords.y);
-    const isShortMove = dragDistancePixels < (rect.width / 8) * 1.5; // Less than 1.5 squares
+    const end = getFreshCoords(to);
+    const dragDistancePixels = Math.hypot(end.x - start.x, end.y - start.y);
+    const freshRect = boardElement.getBoundingClientRect();
+    const isShortMove = dragDistancePixels < (freshRect.width / 8) * 1.5;
 
-    // Longer duration for short moves to ensure detection
-    const dragDuration = isShortMove ? 250 + Math.random() * 50 : 150 + Math.random() * 50;
+    // Fast Mode: Minimal duration
+    let dragDuration;
+    if (isFastMode) {
+        dragDuration = 30; // 30ms super fast drag
+    } else {
+        dragDuration = isShortMove ? 250 + Math.random() * 50 : 150 + Math.random() * 50;
+    }
 
-
-
-    // 3. Multiple Drag Steps for better detection
-    const steps = isShortMove ? 3 : 2; // More steps for short moves
+    // 3. Multiple Drag Steps
+    // Fast Mode: Only 1 step
+    const steps = isFastMode ? 1 : (isShortMove ? 3 : 2);
     for (let i = 1; i <= steps; i++) {
         setTimeout(() => {
+            const freshFrom = getFreshCoords(from);
+            const freshTo = getFreshCoords(to);
             const progress = i / (steps + 1);
-            const stepX = fromCoords.x + (toCoords.x - fromCoords.x) * progress - window.scrollX;
-            const stepY = fromCoords.y + (toCoords.y - fromCoords.y) * progress - window.scrollY;
+            const stepX = freshFrom.x + (freshTo.x - freshFrom.x) * progress;
+            const stepY = freshFrom.y + (freshTo.y - freshFrom.y) * progress;
             dispatchAll(sourceEl, 'move', stepX, stepY, 1);
         }, (dragDuration / (steps + 1)) * i);
     }
 
     // 4. Drop (At Destination)
     setTimeout(() => {
-        const endX = toCoords.x - window.scrollX;
-        const endY = toCoords.y - window.scrollY;
+        const freshEnd = getFreshCoords(to);
+        const endX = freshEnd.x;
+        const endY = freshEnd.y;
 
         const destEls = document.elementsFromPoint(endX, endY);
         const destEl = destEls.find(e => {
@@ -1124,7 +1275,7 @@ function addResetButton() {
     btn.style.boxShadow = '0 2px 5px rgba(0,0,0,0.3)';
 
     btn.onclick = () => {
-        console.log("Solver: Manual Reset Triggered");
+        console.log("Solver: Resetting");
         btn.innerText = '♻️ Rebooting...';
         btn.style.backgroundColor = '#e67e22'; // Orange
 

@@ -21,14 +21,18 @@ async function ensureOffscreenDocument() {
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     if (request.type === "ANALYZE_BOARD") {
 
-        console.log("Analyzing FEN:", request.fen);
         currentResponseCallback = sendResponse;
 
-        // Ensure offscreen document exists then send message
-        ensureOffscreenDocument().then(() => {
-            chrome.runtime.sendMessage({
-                type: 'ANALYZE_OFFSCREEN',
-                fen: request.fen
+        // Get speedMode from storage and send to offscreen
+        chrome.storage.local.get(['speedMode'], (result) => {
+            const speedMode = result.speedMode || 'master';
+
+            ensureOffscreenDocument().then(() => {
+                chrome.runtime.sendMessage({
+                    type: 'ANALYZE_OFFSCREEN',
+                    fen: request.fen,
+                    speedMode: speedMode
+                });
             });
         });
 

@@ -102,6 +102,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }, () => {
             notifyContentScript({
                 type: "UPDATE_DELAY_SETTINGS",
+                speedMode: mode,
                 minDelay: presets.min,
                 maxDelay: presets.max
             });
