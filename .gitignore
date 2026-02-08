@@ -1,1 +1,4 @@
 /Prompt.md
+launcher.py
+__pycache__/
+*.pyc
