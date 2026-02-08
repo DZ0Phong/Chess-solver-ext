@@ -25,13 +25,10 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         if (result.autoMoveEnabled) {
             autoMoveCheck.checked = true;
-            enableVisualsControl(true);
-        } else {
-            enableVisualsControl(false);
         }
 
-        // Fix Persistence: Check hideVisuals only if autoMove is enabled
-        if (result.hideVisuals && result.autoMoveEnabled) {
+        // Load hideVisuals state (now independent of autoMove)
+        if (result.hideVisuals) {
             hideVisualsCheck.checked = true;
         }
 
@@ -61,20 +58,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
     autoMoveCheck.addEventListener('change', (e) => {
         const isAuto = e.target.checked;
-        enableVisualsControl(isAuto);
-
-        let hideVisuals = hideVisualsCheck.checked;
-        if (!isAuto) {
-            hideVisuals = false;
-            hideVisualsCheck.checked = false;
-        }
 
         chrome.storage.local.set({
-            autoMoveEnabled: isAuto,
-            hideVisuals: hideVisuals
+            autoMoveEnabled: isAuto
         }, () => {
             notifyContentScript({ type: "TOGGLE_AUTO_MOVE", enabled: isAuto });
-            notifyContentScript({ type: "TOGGLE_VISUALS", hidden: hideVisuals });
         });
     });
 
@@ -144,13 +132,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
-    function enableVisualsControl(enable) {
-        if (enable) {
-            visualsControl.classList.remove('disabled-control');
-        } else {
-            visualsControl.classList.add('disabled-control');
-        }
-    }
+    // enableVisualsControl removed - Hide Visuals now works independently
 
     function notifyContentScript(message) {
         chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
