@@ -2,7 +2,7 @@
 
 A powerful, high-performance Chrome/Edge extension that integrates the **Stockfish** chess engine directly into your browser to assist with gameplay analysis in real-time.
 
-![Extension Preview](src/assets/icon.png)
+![Extension Preview](src/assets/icon-128.png)
 
 ## 🚀 Key Features
 
